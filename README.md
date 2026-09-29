@@ -1,4 +1,6 @@
 # TraceML
+![logo](media\extension_logo.png)
+
 
 TraceML is a VS Code extension for browsing ML training runs. It finds runs on the filesystem and shows them in a panel inside VS Code: a run table with filtering and sorting, metric plots, a detail view for each run, and side-by-side comparison.
 
