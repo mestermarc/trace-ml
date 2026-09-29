@@ -1,0 +1,149 @@
+{
+  "name": "traceml",
+  "displayName": "TraceML",
+  "description": "Read-only, filesystem-only viewer for ML training runs (tables, plots, comparison) inside VS Code. Works over Remote-SSH.",
+  "version": "0.1.2",
+  "publisher": "traceml",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://example.invalid/traceml.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0",
+    "node": ">=20"
+  },
+  "categories": [
+    "Visualization",
+    "Data Science",
+    "Machine Learning"
+  ],
+  "keywords": [
+    "experiments",
+    "ml",
+    "training",
+    "metrics",
+    "runs"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onWebviewPanel:traceml.experiments",
+    "onView:traceml.home"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "traceml.showExperiments",
+        "title": "Show Experiments",
+        "category": "TraceML"
+      },
+      {
+        "command": "traceml.refresh",
+        "title": "Refresh",
+        "category": "TraceML"
+      }
+    ],
+    "configuration": {
+      "title": "TraceML",
+      "properties": {
+        "traceml.roots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "runs"
+          ],
+          "markdownDescription": "The runs folders TraceML reads. Each entry is a folder whose direct sub-folders are runs: an absolute path (`/data/me/runs`, `D:\\runs`) or a path relative to each workspace folder (`runs`, `outputs/runs`). Nothing else is scanned, and TraceML never reads outside these folders."
+        },
+        "traceml.refreshIntervalSeconds": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "markdownDescription": "Polling interval in seconds."
+        },
+        "traceml.staleAfterSeconds": {
+          "type": "number",
+          "default": 60,
+          "minimum": 1,
+          "markdownDescription": "A `running` run whose `heartbeat_at` is older than this is shown as `stale`."
+        },
+        "traceml.maxPointsPerSeries": {
+          "type": "integer",
+          "default": 5000,
+          "minimum": 100,
+          "markdownDescription": "Series longer than this are downsampled with min/max-preserving buckets before plotting."
+        },
+        "traceml.maxMetricsFileMB": {
+          "type": "number",
+          "default": 64,
+          "minimum": 1,
+          "markdownDescription": "At most this many megabytes of each plotted run's `metrics.jsonl` are loaded into memory. Larger files are plotted partially with a warning."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "traceml",
+          "title": "TraceML",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "traceml": [
+        {
+          "id": "traceml.home",
+          "name": "Experiments",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "traceml.home",
+        "contents": "Browse the ML training runs found in this workspace.\n[Open Experiments](command:traceml.showExperiments)\n[Refresh](command:traceml.refresh)\nRuns are found under directories matching the [traceml.roots](command:workbench.action.openSettings?%5B%22traceml.roots%22%5D) setting."
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "build:prod": "node esbuild.mjs --production",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "npm run typecheck && npm test && npm run build",
+    "package": "npm run typecheck && npm test && npm run build:prod && vsce package --no-dependencies",
+    "preview": "esbuild scripts/preview.ts --bundle --platform=node --outfile=dist/preview.cjs --log-level=warning && node dist/preview.cjs",
+    "bench": "esbuild scripts/bench.ts --bundle --platform=node --outfile=dist/bench.cjs --log-level=warning && node dist/bench.cjs",
+    "vscode:prepublish": "node esbuild.mjs --production"
+  },
+  "dependencies": {
+    "uplot": "^1.6.31",
+    "yaml": "^2.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "@types/vscode": "~1.85.0",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.11"
+  },
+  "icon": "media/extension_logo.png",
+  "galleryBanner": {
+    "color": "#13151a",
+    "theme": "dark"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": false
+  }
+}
