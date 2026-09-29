@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { boxData, boxStats, groupLabel, groupRuns, logTicks, niceTicks, NONE_GROUP, numericValue, quantile, scatterData } from '../src/model/analysis';
+import { barData, boxData, boxStats, groupLabel, groupRuns, logTicks, niceTicks, NONE_GROUP, numericValue, quantile, scatterData } from '../src/model/analysis';
 import { filterRuns } from '../src/model/filters';
 import { extractSeries, seriesXY } from '../src/model/metricSeries';
 import { sortRuns } from '../src/model/run';
@@ -193,5 +193,38 @@ describe('line-plot epoch data', () => {
   it('sorts out-of-order x and hides non-positive values on log-y', () => {
     const q = { ...p, step: [3, 1, 2], epoch: [3, 1, 2], wall: [3, 1, 2], y: [0.5, -1, 0.2] };
     expect(seriesXY(q, 'step', true)).toEqual({ x: [1, 2, 3], y: [null, 0.2, 0.5] });
+  });
+});
+
+describe('bar data', () => {
+  it('one bar per run, sorted descending, missing values excluded, keys kept for click-through', () => {
+    const d = barData(runs, 'best:val/auc', { mode: 'runs', groupField: null, sort: 'desc' });
+    expect(d.bars.map((b) => [b.key, b.value])).toEqual([['a', 0.9], ['c', 0.85], ['b', 0.7], ['d', 0.6]]);
+    expect(d.excluded).toBe(1);
+  });
+
+  it('ascending, table order, and the run limit', () => {
+    expect(barData(runs, 'best:val/auc', { mode: 'runs', groupField: null, sort: 'asc' }).bars.map((b) => b.key)).toEqual(['d', 'b', 'c', 'a']);
+    expect(barData(runs, 'best:val/auc', { mode: 'runs', groupField: null, sort: 'table' }).bars.map((b) => b.key)).toEqual(['a', 'b', 'c', 'd']);
+    const lim = barData(runs, 'best:val/auc', { mode: 'runs', groupField: null, sort: 'desc', limit: 2 });
+    expect(lim.bars.map((b) => b.key)).toEqual(['a', 'c']);
+    expect(lim.truncated).toBe(2);
+  });
+
+  it('runs mode carries the group label for colouring', () => {
+    const d = barData(runs, 'best:val/auc', { mode: 'runs', groupField: 'param:data.dataset', sort: 'desc' });
+    expect(d.bars.map((b) => b.group)).toEqual(['cifar10', 'cifar10', 'cifar100', 'cifar100']);
+  });
+
+  it('groups mode: mean with min/max and n per group', () => {
+    const d = barData(runs, 'best:val/auc', { mode: 'groups', groupField: 'param:data.dataset', sort: 'desc' });
+    expect(d.bars.map((b) => [b.label, b.n, b.min, b.max])).toEqual([['cifar10', 2, 0.85, 0.9], ['cifar100', 2, 0.6, 0.7]]);
+    expect(d.bars[0]!.value).toBeCloseTo(0.875);
+    expect(d.excluded).toBe(1);
+  });
+
+  it('updates after filtering', () => {
+    const filtered = filterRuns(runs, { search: 'lr-sweep', statuses: [], columns: {} });
+    expect(barData(filtered, 'best:val/auc', { mode: 'runs', groupField: null, sort: 'desc' }).bars.map((b) => b.key)).toEqual(['a', 'b']);
   });
 });

@@ -55,7 +55,13 @@ describe('discovery (configured runs folders only)', () => {
   it('does not find runs folders that are not configured', async () => {
     expect(await discover(ws, ['runs'])).toEqual([]);
     const { problems } = await resolveRunsRoots([{ name: 'ws', fsPath: ws }], ['runs']);
-    expect(problems[0]).toMatch(/folder "runs" not found/);
+    expect(problems[0]).toMatch(/no runs folder found \(looked for "runs" in the workspace\)/);
+  });
+
+  it('accepts ./ prefixes and skips missing defaults silently when another one exists', async () => {
+    const { roots, problems } = await resolveRunsRoots([{ name: 'ws', fsPath: ws }], ['./exp/runs', 'traceml/runs']);
+    expect(roots.map((r) => r.label)).toEqual(['exp/runs']);
+    expect(problems).toEqual([]);
   });
 
   it('supports absolute runs folders (Windows or POSIX) outside the workspace', async () => {
