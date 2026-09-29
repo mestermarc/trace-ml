@@ -11,7 +11,7 @@ The filesystem is the only source of truth. There is no server, no database, no 
 **Quick start**
 
 1. Make your training code write runs in the [TraceML run format](#writing-runs-the-traceml-run-format). You can copy the stdlib-only reference logger included below.
-2. Set `traceml.roots` to your runs folder, e.g. `"runs"` (relative to the workspace) or `"/data/me/project/runs"`.
+2. Write the runs to `./traceml/runs` inside the opened folder, which is read by default. Otherwise set `traceml.roots` to your runs folder, e.g. `"./runs"` or `"/data/me/project/runs"`.
 3. Click the TraceML icon in the activity bar, or run **TraceML: Show Experiments**.
 
 ```
@@ -47,7 +47,7 @@ The packaged extension doesn't need Node, npm or any other process running.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `traceml.roots` | `["runs"]` | The runs folders to read. Each entry is a folder whose **direct sub-folders are runs**: an absolute path (`/data/me/runs`, `D:\runs`) or a path relative to each workspace folder (`runs`, `outputs/runs`). Only these folders are read. There's no recursive search, and patterns aren't supported. |
+| `traceml.roots` | `["./traceml/runs"]` | The runs folders to read. Each entry is a folder whose **direct sub-folders are runs**: a path relative to each workspace folder (`./traceml/runs`, `./runs`, `outputs/runs`) or an absolute path (`/data/me/runs`, `D:\runs`). Entries that don't exist are skipped, and an error is shown only when none is found. Only these folders are read. There's no recursive search, and patterns aren't supported. |
 | `traceml.refreshIntervalSeconds` | `5` | How often TraceML polls for changes, in seconds. |
 | `traceml.staleAfterSeconds` | `60` | A `running` run whose heartbeat is older than this is shown as `stale`. |
 | `traceml.maxPointsPerSeries` | `5000` | Series longer than this are downsampled before plotting. |
@@ -100,7 +100,7 @@ TraceML uses a dark-only application shell with its own design system, inside a 
     - An amber warning icon after a run name marks *file problems*, such as corrupt or missing files, malformed metric lines, or a newer schema. That's separate from a *failed* run status. Hover over it for details; they're also listed in the inspector.
     - Only the rows on screen exist in the DOM, and rows are reused across live refreshes. Drag the bottom edge to resize the table.
     - Keyboard: ↑/↓ and Home/End move the focus, Space selects, Esc closes the inspector.
-  - **Visualization** has a *Line | Scatter | Box* switch. The workflow is: filter, then select or group, then choose a visualization and its fields, then inspect, then click a run to see its details.
+  - **Visualizations** are stacked one under another: **Line**, **Scatter**, **Box** and **Bar**. Each section can be collapsed (a collapsed section isn't drawn), and has its own controls. The workflow is: filter, then select or group, then choose fields, then inspect, then click a run to see its details.
     - **Line** (the metric history in `metrics.jsonl`, for the selected runs):
       - *+ Metrics* opens a searchable picker grouped into TRAIN / VAL / TEST / SYSTEM / OTHER. The plotted metrics appear as removable chips.
       - The x-axis can show step, epoch, or wall time (relative to `started_at`). There's also Log Y, EMA smoothing from 0 to 0.99 (with the raw line kept faintly visible), and *Colour by group*.
@@ -113,6 +113,11 @@ TraceML uses a dark-only application shell with its own design system, inside a 
       - Runs with missing, `null`, NaN, non-numeric or (on a log axis) ≤ 0 values are left out, and the count is shown.
       - Hover over a point for its values; click it to open the run.
     - **Box** (all filtered runs): one box per group, showing the quartiles, the median, and whiskers reaching to 1.5 × IQR. Every run is drawn as a jittered point, with outliers hollow. Hover for details, or click a point to open the run.
+    - **Bar** (all filtered runs, run-level data only):
+      - *One per run* draws horizontal bars, colored by the Group field if one is set, with at most 60 bars; filter to narrow down. Click a bar to open the run.
+      - *Group mean (min–max)* draws one bar per group with a whisker from min to max and the run count.
+      - Sort by highest first, lowest first or table order. *Start at zero* (on by default) keeps bar lengths honest; turn it off to fit the axis to the data range. Sorting is a display choice only; TraceML never ranks runs.
+- **Remembered view:** the plotted metrics, selected runs, filters, sort order, columns, grouping, chart settings and collapsed sections are restored when you reopen TraceML or reload the window. They're kept per workspace in VS Code's own storage, not as a file in your project.
 - **Run inspector:** a side panel that opens when you click a run in any view.
   - *Header:* name, status, group, start time, tags and id, plus a *Select* button.
   - *Error callout* (for failed runs): error type, message, exit code and the traceback tail.
@@ -141,7 +146,7 @@ This section is the **authoritative specification** for producing runs that Trac
 ### 1. Directory layout
 
 ```
-<runs folder>/                      ← an entry of traceml.roots
+<runs folder>/                      ← an entry of traceml.roots (default: ./traceml/runs)
 └── <run_id>/                       ← one directory per run; run_id = directory name
     ├── run.json          required  run metadata + status + heartbeat
     ├── params.yaml       required  flat hyper-parameters
@@ -509,7 +514,7 @@ With `"extensionKind": ["workspace"]`, the extension host, and so all filesystem
 
 What the extension can and cannot do:
 
-- **Read-only.** TraceML cannot create, modify, rename or delete files.
+- **Read-only.** TraceML cannot create, modify, rename or delete files. (Your view settings are remembered in VS Code's internal per-workspace storage, through the VS Code API; nothing is written into your project or runs folders.)
   - The extension source uses only `stat`, `readdir`, `realpath`, `readFile` and `open(…, 'r')`. A test suite (`test/security.test.ts`) fails the build if a write, process or network API is ever added.
   - Files opened from the UI (*Files* in the inspector) are shown through a read-only `traceml-readonly:` file system, so they can't be edited or saved through TraceML.
 - **Confined to your runs folders.** TraceML reads only inside the folders listed in `traceml.roots`, and it doesn't search the rest of the workspace.
@@ -525,7 +530,7 @@ What the extension can and cannot do:
   - `run.json`, `params.yaml`, `metrics.json` and `config.json` over 16 MB are not parsed. `metrics.jsonl` is read up to `traceml.maxMetricsFileMB`.
   - A corrupt file only produces a warning on that run.
 - **Filesystem load** is bounded:
-  - Polling only runs while the panel is open. The default is every 5 s, and finished runs are checked about every 30 s.
+  - Polling only runs while the TraceML panel is open **and visible**. Nothing is read when it's closed or in a background tab; it refreshes as soon as you switch back. The default is every 5 s, and finished runs are checked about every 30 s.
   - Each poll reads each configured runs folder once, plus the core files of the runs in it. Unchanged files are skipped by modification time and size.
   - On slow network filesystems (e.g. NFS on a cluster), raise `traceml.refreshIntervalSeconds` and narrow `traceml.roots`.
 - **Dependencies:** at runtime only `yaml` and `uplot`, bundled into `dist/`. `npm audit` reports 0 known vulnerabilities.
@@ -546,8 +551,8 @@ What the extension can and cannot do:
 `scripts/fake_runs.py` needs only the Python standard library: no PyTorch, CUDA, W&B, DVC or network access. It writes the **exact** TraceML format using atomic dot-file-and-rename writes, just like a real logger.
 
 ```bash
-python scripts/fake_runs.py                                   # 24 runs into test-data/runs
-python scripts/fake_runs.py --runs 100 --output test-data/runs
+python scripts/fake_runs.py                                   # 24 runs into test-data/traceml/runs
+python scripts/fake_runs.py --runs 100 --output test-data/traceml/runs
 python scripts/fake_runs.py --runs 1000 --clean               # table performance
 python scripts/fake_runs.py --big-run-lines 200000            # adds a run with a 200k-line metrics.jsonl
 python scripts/fake_runs.py --runs 0 --live                   # only a live run, until Ctrl+C
@@ -556,7 +561,7 @@ python scripts/fake_runs.py --live --live-interval 1 --live-epochs 50   # live r
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--output DIR` | `test-data/runs` | The runs directory to write into. |
+| `--output DIR` | `test-data/traceml/runs` | The runs directory to write into. |
 | `--runs N` | `24` | How many historical runs to generate (`0` means none). |
 | `--seed N` | `0` | Random seed. |
 | `--clean` | off | Deletes the output directory first. It refuses if the directory contains anything that isn't a run. |
@@ -592,7 +597,7 @@ You need Node.js 20 LTS (or newer) and npm on your **local machine**. Nothing is
 ```bash
 node --version && npm --version
 npm install
-python scripts/fake_runs.py --clean          # local fixture data in test-data/runs
+python scripts/fake_runs.py --clean          # local fixture data in test-data/traceml/runs
 npm run build                                # esbuild -> dist/extension.js, dist/webview.{js,css}
 npm test                                     # vitest
 npm run typecheck                            # tsc --noEmit (strict)

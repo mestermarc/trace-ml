@@ -2,12 +2,12 @@
   "name": "traceml",
   "displayName": "TraceML",
   "description": "Read-only, filesystem-only viewer for ML training runs (tables, plots, comparison) inside VS Code. Works over Remote-SSH.",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "publisher": "traceml",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://example.invalid/traceml.git"
+    "url": "https://github.com/mestermarc/trace-ml.git"
   },
   "engines": {
     "vscode": "^1.85.0",
@@ -55,9 +55,9 @@
             "type": "string"
           },
           "default": [
-            "runs"
+            "./traceml/runs"
           ],
-          "markdownDescription": "The runs folders TraceML reads. Each entry is a folder whose direct sub-folders are runs: an absolute path (`/data/me/runs`, `D:\\runs`) or a path relative to each workspace folder (`runs`, `outputs/runs`). Nothing else is scanned, and TraceML never reads outside these folders."
+          "markdownDescription": "The runs folders TraceML reads. Each entry is a folder whose direct sub-folders are runs: a path relative to each workspace folder (default `./traceml/runs`; e.g. `./runs`, `outputs/runs`) or an absolute path (`/data/me/runs`, `D:\\\\runs`). Entries that don't exist are skipped. Nothing else is scanned, and TraceML never reads outside these folders."
         },
         "traceml.refreshIntervalSeconds": {
           "type": "number",
@@ -106,7 +106,7 @@
     "viewsWelcome": [
       {
         "view": "traceml.home",
-        "contents": "Browse the ML training runs found in this workspace.\n[Open Experiments](command:traceml.showExperiments)\n[Refresh](command:traceml.refresh)\nRuns are found under directories matching the [traceml.roots](command:workbench.action.openSettings?%5B%22traceml.roots%22%5D) setting."
+        "contents": "Browse the ML training runs of this workspace.\n[Open Experiments](command:traceml.showExperiments)\n[Refresh](command:traceml.refresh)\nRuns are read from ./traceml/runs by default. Change the folder with the [traceml.roots](command:workbench.action.openSettings?%5B%22traceml.roots%22%5D) setting."
       }
     ]
   },
@@ -145,5 +145,9 @@
       "supported": true
     },
     "virtualWorkspaces": false
-  }
+  },
+  "bugs": {
+    "url": "https://github.com/mestermarc/trace-ml/issues"
+  },
+  "homepage": "https://github.com/mestermarc/trace-ml#readme"
 }
