@@ -1,0 +1,1 @@
+{"schema_version": 2, "step": 5, "epoch": 5, "last": {"val/auc": 0.9}, "best": {}, "summary": {}, "new_section": {}}

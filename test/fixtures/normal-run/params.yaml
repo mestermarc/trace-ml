@@ -1,0 +1,6 @@
+data.batch_size: 64
+model.hidden: 128
+optim.lr: 0.0003
+optim.name: "adamw"
+train.amp: true
+train.note: null

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-09-29T14:10:00Z",
+  "step": 1200,
+  "epoch": 19,
+  "last": {"train/loss": 0.21, "val/auc": 0.88, "lr": 0.000001, "weird": "text"},
+  "best": {"val/auc": {"value": 0.894, "step": 900, "epoch": 14, "mode": "max"}},
+  "summary": {"test/auc": 0.881, "val/auc_best": 0.894, "note": "ok"}
+}

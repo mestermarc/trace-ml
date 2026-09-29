@@ -1,0 +1,2 @@
+{"step": 0, "epoch": 0, "time": 1.0, "train/loss": 1.0}
+{"step": 1, "epoch": 1, "time": 2.0, "train/loss": 0.5, "val/auc": 0.6}

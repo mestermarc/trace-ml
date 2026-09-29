@@ -1,0 +1,1 @@
+{"schema_version": 2, "id": "future", "name": "future", "status": "completed", "started_at": "2026-09-29T10:00:00Z", "ended_at": "2026-09-29T11:00:00Z", "heartbeat_at": "2026-09-29T11:00:00Z", "duration_s": 3600, "resources": {"gpu_hours": 1}, "exit": {"code": 0, "signal": null}}

@@ -1,0 +1,4 @@
+{"step": 0, "epoch": 0, "time": 1790000000.0, "train/loss": 0.9, "lr": 0.0003}
+{"step": 0, "epoch": 0, "time": 1790000001.0, "val/loss": 0.95, "val/auc": null}
+{"step": 1, "epoch": 1, "time": 1790000002.0, "train/loss": 0.7, "lr": 0.00028}
+{"step": 1, "epoch": 1, "time": 1790000003.0, "val/loss": 0.8, "val/auc": 0.71}

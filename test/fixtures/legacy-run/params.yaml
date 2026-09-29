@@ -1,0 +1,11 @@
+data:
+  batch_size: 32
+  augment: true
+model:
+  name: mlp
+  layers: [128, 128]
+optim:
+  lr: 1.0e-3
+  sched:
+    name: cosine
+    warmup: 2

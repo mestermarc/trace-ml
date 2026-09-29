@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "id": "20260929-154600_mlp-baseline_a3f1",
+  "name": "mlp-baseline",
+  "group": "lr-sweep",
+  "tags": ["cv"],
+  "notes": "",
+  "status": "running",
+  "started_at": "2026-09-29T13:46:00Z",
+  "ended_at": null,
+  "heartbeat_at": "2026-09-29T13:47:10Z",
+  "duration_s": null,
+  "exit": null,
+  "command": ["python", "train.py", "--lr", "3e-4"],
+  "cwd": "/home/u/proj",
+  "host": {"hostname": "gpu01", "pid": 1234, "user": "u", "python": "3.12.3", "torch": "2.8.0", "cuda": "12.6", "gpus": ["NVIDIA A100"]},
+  "git": {"sha": "abc123", "branch": "main", "dirty": true, "remote": "git@example:proj.git"},
+  "some_future_key": {"ignored": true}
+}
