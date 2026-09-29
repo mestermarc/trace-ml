@@ -1,0 +1,29 @@
+# dependencies / build output
+node_modules/
+dist/
+out/
+*.vsix
+*.tsbuildinfo
+
+# local test data (regenerate with: python scripts/fake_runs.py --clean)
+test-data/
+
+# tooling / caches
+coverage/
+.vscode-test/
+.eslintcache
+npm-debug.log*
+*.log
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.env.*
+02-TraceML-viewer.md
+03-TraceML-modern-ui.md
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+.idea/
