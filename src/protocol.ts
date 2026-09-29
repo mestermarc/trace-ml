@@ -17,7 +17,12 @@ export type WebviewToHost =
   | { type: 'openFile'; runKey: string; file: RunFileName }
   | { type: 'refreshNow' }
   /** Opens the VS Code settings UI filtered to TraceML settings. */
-  | { type: 'openSettings' };
+  | { type: 'openSettings' }
+  /** UI state (plots, selection, filters...) to remember for the next time the panel opens. */
+  | { type: 'saveState'; state: Record<string, unknown> };
+
+/** Upper bound for a saved UI state (it only holds settings, keys and names). */
+export const MAX_UI_STATE_BYTES = 512 * 1024;
 
 const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
 
@@ -33,6 +38,11 @@ export function parseWebviewMessage(msg: unknown): WebviewToHost | null {
     case 'requestSeries':
       if (isStringArray(m.runKeys) && isStringArray(m.metrics) && m.runKeys.length <= 1000 && m.metrics.length <= 1000) {
         return { type: 'requestSeries', runKeys: m.runKeys, metrics: m.metrics };
+      }
+      return null;
+    case 'saveState':
+      if (typeof m.state === 'object' && m.state !== null && !Array.isArray(m.state) && JSON.stringify(m.state).length <= MAX_UI_STATE_BYTES) {
+        return { type: 'saveState', state: m.state as Record<string, unknown> };
       }
       return null;
     case 'requestDetail':

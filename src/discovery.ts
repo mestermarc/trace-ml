@@ -60,9 +60,10 @@ function labelFor(dir: string, folders: readonly FolderLike[]): string {
 export async function resolveRunsRoots(folders: readonly FolderLike[], entries: readonly string[]): Promise<RootsResult> {
   const roots = new Map<string, RunsRoot>();
   const problems: string[] = [];
+  const missing: string[] = [];
   for (const raw of entries) {
-    const entry = raw.trim();
-    if (!entry) continue;
+    const entry = raw.trim().replace(/^\.[\\/]+/, '');
+    if (!entry || entry === '.') continue;
     if (hasGlobChars(entry)) {
       problems.push(`traceml.roots: "${entry}" is a pattern; only plain folder paths are supported`);
       continue;
@@ -80,7 +81,11 @@ export async function resolveRunsRoots(folders: readonly FolderLike[], entries: 
       found = true;
       if (![...roots.values()].some((r) => r.real === real)) roots.set(dir, { dir, real, label: labelFor(dir, folders) });
     }
-    if (!found) problems.push(`traceml.roots: folder "${entry}" not found${isAbsolutePath(entry) ? '' : ' in the workspace'}`);
+    if (!found) missing.push(entry);
+  }
+  // Several default locations may be listed; only complain when none of them exists.
+  if (roots.size === 0 && missing.length) {
+    problems.push(`traceml.roots: no runs folder found (looked for ${missing.map((m) => `"${m}"`).join(', ')}${missing.some((m) => !isAbsolutePath(m)) ? ' in the workspace' : ''})`);
   }
   return { roots: [...roots.values()], problems };
 }

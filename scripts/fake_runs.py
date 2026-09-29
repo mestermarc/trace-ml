@@ -9,7 +9,7 @@ Standard library only. Produces the exact TraceML filesystem format:
 
 Examples:
 
-    python scripts/fake_runs.py                                  # 24 runs into test-data/runs
+    python scripts/fake_runs.py                                  # 24 runs into test-data/traceml/runs
     python scripts/fake_runs.py --runs 1000 --clean              # table performance
     python scripts/fake_runs.py --big-run-lines 200000           # adds a 200k-line metrics.jsonl
     python scripts/fake_runs.py --runs 0 --live                  # only a live run, until Ctrl+C
@@ -589,7 +589,7 @@ def special_specs() -> list[RunSpec]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Generate fake TraceML runs (standard library only).")
-    ap.add_argument("--output", default="test-data/runs", help="runs directory to write into (default: test-data/runs)")
+    ap.add_argument("--output", default="test-data/traceml/runs", help="runs directory to write into (default: test-data/traceml/runs)")
     ap.add_argument("--runs", type=int, default=24, help="number of historical runs to generate (default: 24; 0 = none)")
     ap.add_argument("--seed", type=int, default=0, help="random seed (default: 0)")
     ap.add_argument("--clean", action="store_true", help="delete the output directory first (only if it contains only runs)")

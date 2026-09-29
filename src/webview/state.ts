@@ -52,6 +52,18 @@ export interface PersistedState {
     boxGroup: string | null;
     logX: boolean;
     logY: boolean;
+    boxLogY: boolean;
+    bar: {
+      field: string | null;
+      /** 'auto' follows the table grouping. */
+      group: string | null;
+      mode: 'runs' | 'groups';
+      sort: 'desc' | 'asc' | 'table';
+      /** Bars start at zero (honest lengths); off = axis fits the data range. */
+      zero: boolean;
+    };
+    /** Visualization sections the user collapsed ('line' | 'scatter' | 'box' | 'bar'). */
+    collapsed: string[];
   };
   colors: Record<string, number>;
   tableHeight: number;
@@ -75,7 +87,20 @@ const DEFAULT_STATE: PersistedState = {
   plot: { metrics: null, xMode: 'step', logY: false, smoothing: 0, hidden: [], colorBy: 'run' },
   groupBy: null,
   collapsedGroups: [],
-  analysis: { view: 'line', x: null, y: null, size: null, color: 'auto', boxField: null, boxGroup: 'auto', logX: false, logY: false },
+  analysis: {
+    view: 'line',
+    x: null,
+    y: null,
+    size: null,
+    color: 'auto',
+    boxField: null,
+    boxGroup: 'auto',
+    logX: false,
+    logY: false,
+    boxLogY: false,
+    bar: { field: null, group: 'auto', mode: 'runs', sort: 'desc', zero: true },
+    collapsed: [],
+  },
   colors: {},
   tableHeight: 320,
 };
@@ -109,9 +134,18 @@ export class AppState {
   private cache: { all?: RunSummary[]; filtered?: RunSummary[]; sorted?: RunSummary[]; columns?: ColumnDef[]; items?: TableItem[]; groups?: RunGroup[] } = {};
 
   constructor() {
-    const saved = this.vscode.getState() as Partial<PersistedState> | undefined;
-    // Older saved states may lack newer fields; defaults fill them in.
-    this.s = saved && saved.version === 1 ? { ...DEFAULT_STATE, ...saved, plot: { ...DEFAULT_STATE.plot, ...(saved.plot ?? {}) }, analysis: { ...DEFAULT_STATE.analysis, ...(saved.analysis ?? {}) } } : structuredClone(DEFAULT_STATE);
+    // Webview state survives hide/show; the host copy (VS Code workspace storage) survives closing
+    // and reopening the panel. Older saved states may lack newer fields; defaults fill them in.
+    const saved = (this.vscode.getState() ?? readHostState()) as Partial<PersistedState> | null;
+    this.s =
+      saved && saved.version === 1
+        ? {
+            ...structuredClone(DEFAULT_STATE),
+            ...saved,
+            plot: { ...DEFAULT_STATE.plot, ...(saved.plot ?? {}) },
+            analysis: { ...DEFAULT_STATE.analysis, ...(saved.analysis ?? {}), bar: { ...DEFAULT_STATE.analysis.bar, ...(saved.analysis?.bar ?? {}) } },
+          }
+        : structuredClone(DEFAULT_STATE);
   }
 
   // -- change notification ---------------------------------------------------
@@ -135,8 +169,14 @@ export class AppState {
     });
   }
 
+  private hostSaveTimer: ReturnType<typeof setTimeout> | undefined;
+
   private persist(): void {
     this.vscode.setState(this.s);
+    // Also keep a copy in the extension's workspace storage so the plots, selection and filters
+    // come back after the panel is closed and reopened (debounced).
+    clearTimeout(this.hostSaveTimer);
+    this.hostSaveTimer = setTimeout(() => this.post({ type: 'saveState', state: this.s as unknown as Record<string, unknown> }), 800);
   }
 
   post(msg: WebviewToHost): void {
@@ -401,6 +441,16 @@ export class AppState {
 
   isParamColumn(id: string): boolean {
     return parseColumnId(id).kind === 'param';
+  }
+}
+
+/** UI state injected by the host into the page (see extension.ts html()); null when absent. */
+function readHostState(): unknown {
+  try {
+    const el = document.getElementById('traceml-state');
+    return el?.textContent ? JSON.parse(el.textContent) : null;
+  } catch {
+    return null;
   }
 }
 

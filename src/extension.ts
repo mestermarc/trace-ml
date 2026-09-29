@@ -8,6 +8,7 @@ import { RunStore } from './runStore';
 import type { RunSummary, SeriesPayload, ViewConfig } from './types';
 
 const VIEW_TYPE = 'traceml.experiments';
+const UI_STATE_KEY = 'traceml.uiState';
 const SERIES_PER_MESSAGE = 16;
 
 interface Settings extends ViewConfig {
@@ -22,7 +23,7 @@ function readSettings(): Settings {
     return typeof v === 'number' && Number.isFinite(v) ? Math.max(min, v) : def;
   };
   return {
-    roots: c.get<string[]>('roots', ['runs']),
+    roots: c.get<string[]>('roots', ['./traceml/runs']),
     refreshIntervalSeconds: num('refreshIntervalSeconds', 5, 1),
     staleAfterSeconds: num('staleAfterSeconds', 60, 1),
     maxPointsPerSeries: Math.floor(num('maxPointsPerSeries', 5000, 100)),
@@ -106,9 +107,18 @@ class TraceMLController implements vscode.Disposable {
     this.panelDisposables.push(
       panel.webview.onDidReceiveMessage((m) => void this.onMessage(m)),
       panel.onDidDispose(() => this.onPanelDisposed()),
+      // Poll only while the panel is visible: a background tab causes no filesystem reads.
+      panel.onDidChangeViewState((e) => {
+        if (e.webviewPanel.visible) {
+          this.forceNext = true;
+          this.poller.start();
+        } else {
+          this.poller.stop();
+        }
+      }),
     );
     this.forceNext = true;
-    this.poller.start();
+    if (panel.visible) this.poller.start();
   }
 
   refresh(): void {
@@ -117,6 +127,10 @@ class TraceMLController implements vscode.Disposable {
       return;
     }
     this.forceNext = true;
+    if (!this.panel.visible) {
+      this.panel.reveal(); // becoming visible restarts polling with a full refresh
+      return;
+    }
     this.poller.trigger();
   }
 
@@ -261,6 +275,10 @@ class TraceMLController implements vscode.Disposable {
         case 'refreshNow':
           this.refresh();
           break;
+        case 'saveState':
+          // VS Code's own per-workspace storage (not a file in the workspace).
+          await this.ctx.workspaceState.update(UI_STATE_KEY, msg.state);
+          break;
         case 'openSettings':
           await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:traceml.traceml');
           break;
@@ -325,6 +343,8 @@ class TraceMLController implements vscode.Disposable {
       `font-src ${webview.cspSource}`,
       `script-src 'nonce-${n}'`,
     ].join('; ');
+    // Remembered UI state, embedded as inert JSON data (not executable; '<' escaped).
+    const uiState = JSON.stringify(this.ctx.workspaceState.get(UI_STATE_KEY) ?? null).replace(/</g, '\\u003c');
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -336,6 +356,7 @@ class TraceMLController implements vscode.Disposable {
 </head>
 <body>
 <div id="app"></div>
+<script type="application/json" id="traceml-state">${uiState}</script>
 <script nonce="${n}" src="${script}"></script>
 </body>
 </html>`;

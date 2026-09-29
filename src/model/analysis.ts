@@ -185,6 +185,78 @@ export function boxData(runs: readonly RunSummary[], field: string, groupField: 
 }
 
 // ---------------------------------------------------------------------------
+// Bar chart
+// ---------------------------------------------------------------------------
+
+export type BarMode = 'runs' | 'groups';
+export type BarSort = 'desc' | 'asc' | 'table';
+
+export interface Bar {
+  /** Run key (runs mode) or group label (groups mode). */
+  key: string;
+  label: string;
+  value: number;
+  /** Group label (runs mode, when grouped) or the group itself (groups mode). */
+  group: string | null;
+  /** Groups mode: spread and count of the runs in the group. */
+  min?: number;
+  max?: number;
+  n?: number;
+}
+
+export interface BarData {
+  bars: Bar[];
+  /** Runs left out because the field is missing / non-numeric. */
+  excluded: number;
+  /** Bars not shown because of `limit` (runs mode). */
+  truncated: number;
+}
+
+/**
+ * Bar chart data: one bar per run (optionally sorted by value, capped at `limit`), or one bar
+ * per group showing the mean with min/max. Uses run-level values only. Sorting is a display
+ * choice made by the user; TraceML does not rank runs.
+ */
+export function barData(
+  runs: readonly RunSummary[],
+  field: string,
+  opts: { mode: BarMode; groupField: string | null; sort: BarSort; limit?: number },
+): BarData {
+  let excluded = 0;
+  const cmp = (a: Bar, b: Bar) => (opts.sort === 'asc' ? a.value - b.value : b.value - a.value);
+  if (opts.mode === 'groups' && opts.groupField) {
+    const bars: Bar[] = [];
+    for (const g of groupRuns(runs, opts.groupField)) {
+      const vals: number[] = [];
+      for (const r of g.runs) {
+        const v = numericValue(r, field);
+        if (v === null) excluded++;
+        else vals.push(v);
+      }
+      if (!vals.length) continue;
+      const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+      bars.push({ key: g.label, label: g.label, value: mean, group: g.label, min: Math.min(...vals), max: Math.max(...vals), n: vals.length });
+    }
+    if (opts.sort !== 'table') bars.sort(cmp);
+    return { bars, excluded, truncated: 0 };
+  }
+  let bars: Bar[] = [];
+  for (const r of runs) {
+    const v = numericValue(r, field);
+    if (v === null) {
+      excluded++;
+      continue;
+    }
+    bars.push({ key: r.key, label: r.name, value: v, group: opts.groupField ? groupLabel(r, opts.groupField) : null });
+  }
+  if (opts.sort !== 'table') bars.sort(cmp);
+  const limit = opts.limit ?? Number.POSITIVE_INFINITY;
+  const truncated = Math.max(0, bars.length - limit);
+  if (truncated) bars = bars.slice(0, limit);
+  return { bars, excluded, truncated };
+}
+
+// ---------------------------------------------------------------------------
 // Axis helpers (shared by the SVG charts)
 // ---------------------------------------------------------------------------
 
