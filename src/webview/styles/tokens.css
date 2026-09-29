@@ -1,0 +1,101 @@
+/* TraceML design tokens. TraceML is dark-only: every colour used by the UI comes from here. */
+
+:root {
+  /* surfaces (darkest -> lightest) */
+  --tm-bg-sunken: #0e1014; /* sidebar */
+  --tm-bg: #13151a; /* application background */
+  --tm-surface: #171a20; /* panels, table, cards */
+  --tm-surface-raised: #1d2027; /* headers, popovers, inputs */
+  --tm-surface-hover: #232730;
+  --tm-surface-active: #2a2f3a;
+  --tm-border: #2c313b;
+  --tm-border-subtle: #22262e;
+  --tm-border-strong: #3a404c; /* hovered inputs */
+  --tm-control-border: #4a5160; /* checkboxes */
+
+  /* text */
+  --tm-text: #e4e7ec;
+  --tm-text-secondary: #aab1bd;
+  --tm-text-muted: #747c8a;
+  --tm-text-on-accent: #ffffff;
+
+  /* semantic */
+  --tm-accent: #4c8dff;
+  --tm-accent-hover: #6a9fff;
+  --tm-accent-soft: rgba(76, 141, 255, 0.14);
+  --tm-accent-softer: rgba(76, 141, 255, 0.07);
+  --tm-success: #3fbf7f;
+  --tm-warning: #e1a73e;
+  --tm-error: #ef5b56;
+  --tm-info: #5aa7ff;
+  --tm-killed: #e0843f;
+  --tm-stale: #c8a232;
+  --tm-unknown: #8a92a0;
+  --tm-diff: rgba(225, 167, 62, 0.055);
+  --tm-param: #b9a2f0;
+  --tm-param-soft: rgba(178, 140, 242, 0.12);
+
+  /* code / config tree */
+  --tm-code-key: #9cc3ff;
+  --tm-code-string: #d9a67a;
+  --tm-code-number: #a8d4a0;
+  --tm-code-bool: #c59cf2;
+
+  /* chart */
+  --tm-chart-grid: rgba(255, 255, 255, 0.06);
+  --tm-chart-axis: #7d8593;
+  --tm-series-0: #5b9cf6;
+  --tm-series-1: #f2994a;
+  --tm-series-2: #4cc38a;
+  --tm-series-3: #ef6461;
+  --tm-series-4: #b28cf2;
+  --tm-series-5: #e8c547;
+  --tm-series-6: #3fc8d4;
+  --tm-series-7: #f07bb8;
+  --tm-series-8: #a3adbb;
+  --tm-series-9: #a3d65c;
+
+  /* shape */
+  --tm-radius-sm: 4px;
+  --tm-radius-md: 6px;
+  --tm-radius-lg: 8px;
+  --tm-radius-pill: 999px;
+
+  /* spacing */
+  --tm-space-1: 4px;
+  --tm-space-2: 8px;
+  --tm-space-3: 12px;
+  --tm-space-4: 16px;
+  --tm-space-5: 20px;
+  --tm-space-6: 24px;
+
+  /* typography */
+  --tm-font: var(--vscode-font-family, -apple-system, 'Segoe UI', system-ui, sans-serif);
+  --tm-mono: var(--vscode-editor-font-family, ui-monospace, 'Cascadia Code', Consolas, monospace);
+  --tm-fs-xs: 11px;
+  --tm-fs-sm: 12px;
+  --tm-fs-md: 13px;
+  --tm-fs-lg: 15px;
+  --tm-fs-xl: 17px;
+
+  /* layout */
+  --tm-sidebar-w: 212px;
+  --tm-sidebar-rail-w: 52px;
+  --tm-header-h: 46px;
+  --tm-row-h: 30px;
+  --tm-inspector-w: 440px;
+  --tm-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --tm-focus: 0 0 0 2px rgba(76, 141, 255, 0.55);
+  --tm-transition: 120ms ease;
+
+  color-scheme: dark;
+}
+
+/* High-contrast hosts: keep the dark look but use the host's contrast borders and focus colour. */
+body.vscode-high-contrast {
+  --tm-border: var(--vscode-contrastBorder, #6fc3df);
+  --tm-border-subtle: var(--vscode-contrastBorder, #6fc3df);
+  --tm-text-muted: #c5cad3;
+  --tm-text-secondary: #e4e7ec;
+  --tm-focus: 0 0 0 2px var(--vscode-contrastActiveBorder, #f38518);
+}

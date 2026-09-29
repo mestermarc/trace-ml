@@ -1,0 +1,129 @@
+/* Base element styles. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--tm-bg);
+  color: var(--tm-text);
+  font-family: var(--tm-font);
+  font-size: var(--tm-fs-md);
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: 600;
+  color: var(--tm-text);
+}
+
+h1 {
+  font-size: var(--tm-fs-lg);
+}
+
+h2 {
+  font-size: var(--tm-fs-md);
+}
+
+h3 {
+  font-size: var(--tm-fs-sm);
+  color: var(--tm-text-secondary);
+}
+
+code,
+pre,
+.mono {
+  font-family: var(--tm-mono);
+  font-size: var(--tm-fs-sm);
+}
+
+a {
+  color: var(--tm-accent);
+}
+
+[hidden] {
+  display: none !important;
+}
+
+::selection {
+  background: var(--tm-accent-soft);
+}
+
+/* scrollbars */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--tm-surface-active);
+  border-radius: var(--tm-radius-pill);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--tm-border);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--tm-focus);
+}
+
+.muted {
+  color: var(--tm-text-muted);
+}
+
+.secondary {
+  color: var(--tm-text-secondary);
+}
+
+.num,
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
