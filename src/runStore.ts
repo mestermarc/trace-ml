@@ -1,5 +1,7 @@
 // In-memory cache of parsed runs. Re-reads a file only when its mtime/size changed, and loads a
-// run's full metrics.jsonl history only when that run is plotted.
+// run's full metrics.jsonl history only when that run is plotted. Finished runs are not re-checked
+// on polls (only on a forced refresh), and the parsed state can be saved to / seeded from the
+// persistent run index so startup does not re-parse every run.
 import { promises as fs } from 'node:fs';
 import type { DiscoveredRun } from './discovery';
 import { extractSeries } from './model/metricSeries';
@@ -7,24 +9,12 @@ import { buildRunSummary } from './model/run';
 import { parseConfigJson } from './parsers/configJson';
 import { parseMetricsJson } from './parsers/metricsJson';
 import { resolveInside } from './fsGuard';
-import { JsonlTail, peekJsonlMetricNames } from './parsers/metricsJsonl';
+import { JsonlTail, PEEK_BYTES, peekJsonlHead } from './parsers/metricsJsonl';
 import { parseParamsYaml } from './parsers/paramsYaml';
 import { parseRunJson } from './parsers/runJson';
 import { basename, joinPath } from './paths';
+import type { Cached, IndexedRun, Stamp } from './runIndex';
 import { RUN_FILES, type MetricsSummary, type RunDetail, type RunMeta, type RunSummary, type Scalar, type SeriesPayload } from './types';
-
-interface Stamp {
-  mtimeMs: number;
-  size: number;
-}
-
-/** Cached parse of one small file (run.json, params.yaml, metrics.json). */
-interface Cached<T> {
-  stamp: Stamp | null; // null = file missing
-  value: T | null;
-  error: string | null;
-  warnings: string[];
-}
 
 /** run.json / params.yaml / metrics.json / config.json larger than this are not parsed (they are small by contract). */
 export const MAX_SMALL_FILE_BYTES = 16 * 1024 * 1024;
@@ -39,6 +29,10 @@ interface RunEntry {
   jsonlStamp: Stamp | null;
   jsonlOutside: boolean;
   peekedNames: string[];
+  /** Starting value of each metric, from the head of metrics.jsonl. */
+  first: Record<string, number | null>;
+  /** Bytes of metrics.jsonl the head peek looked at (complete once it reaches PEEK_BYTES). */
+  headBytes: number;
   tail: JsonlTail | null;
   summary: RunSummary | null;
   summaryJson: string;
@@ -49,7 +43,7 @@ interface RunEntry {
 export interface StoreOptions {
   staleAfterSeconds: number;
   maxPointsPerSeries: number;
-  /** Finished (completed/failed/killed) runs are re-stat'ed every N polls. */
+  /** Finished (completed/failed/killed) runs are re-stat'ed every N polls (Infinity = only on a forced refresh). */
   finishedCheckEvery: number;
   /** Max number of loaded metric histories kept for runs that are no longer plotted. */
   maxIdleHistories: number;
@@ -135,8 +129,59 @@ export class RunStore {
   /** Recently used histories (LRU order) for runs not currently plotted. */
   private readonly idleTails: string[] = [];
   private pinned = new Set<string>();
+  /** Entries from the persistent index, used until the first sync confirms (or drops) them. */
+  private seeded = new Map<string, { run: IndexedRun; summary: RunSummary; json: string }>();
 
   constructor(private opts: StoreOptions) {}
+
+  /**
+   * Seeds the store from the persistent run index. The seeded summaries are shown right away; the
+   * next sync() keeps the entries whose run folder is still discovered (re-parsing only files whose
+   * stamp changed) and reports the others as removed.
+   */
+  seed(runs: readonly IndexedRun[], now = Date.now()): void {
+    for (const r of runs) {
+      if (this.entries.has(r.key)) continue;
+      const e = this.entryFrom({ key: r.key, dir: r.key, real: '', dirName: r.dirName, location: r.location }, r);
+      const summary = this.rebuildSummary(e, now);
+      if (summary) this.seeded.set(r.key, { run: r, summary, json: e.summaryJson });
+    }
+  }
+
+  /** Parsed state of every run, for the persistent index. */
+  exportIndex(): IndexedRun[] {
+    return [...this.entries.values()].map((e) => ({
+      key: e.run.key,
+      dirName: e.run.dirName,
+      location: e.run.location,
+      runJson: e.runJson,
+      params: e.params,
+      metrics: e.metrics,
+      jsonlStamp: e.jsonlStamp,
+      jsonlOutside: e.jsonlOutside,
+      peekedNames: e.peekedNames,
+      first: e.first,
+      headBytes: e.headBytes,
+    }));
+  }
+
+  private entryFrom(run: DiscoveredRun, seed?: IndexedRun): RunEntry {
+    return {
+      run,
+      runJson: seed?.runJson ?? empty(),
+      params: seed?.params ?? empty(),
+      metrics: seed?.metrics ?? empty(),
+      jsonlStamp: seed?.jsonlStamp ?? null,
+      jsonlOutside: seed?.jsonlOutside ?? false,
+      peekedNames: seed?.peekedNames ?? [],
+      first: seed?.first ?? {},
+      headBytes: seed?.headBytes ?? 0,
+      tail: null,
+      summary: null,
+      summaryJson: '',
+      lastCheckTick: -Infinity,
+    };
+  }
 
   setOptions(opts: Partial<StoreOptions>): void {
     this.opts = { ...this.opts, ...opts };
@@ -152,7 +197,9 @@ export class RunStore {
   }
 
   summaries(): RunSummary[] {
-    return [...this.entries.values()].flatMap((e) => (e.summary ? [e.summary] : []));
+    const out = [...this.entries.values()].flatMap((e) => (e.summary ? [e.summary] : []));
+    for (const [k, s] of this.seeded) if (!this.entries.has(k)) out.push(s.summary);
+    return out;
   }
 
   has(key: string): boolean {
@@ -178,20 +225,17 @@ export class RunStore {
       seen.add(run.key);
       let entry = this.entries.get(run.key);
       if (!entry) {
-        entry = {
-          run,
-          runJson: empty(),
-          params: empty(),
-          metrics: empty(),
-          jsonlStamp: null,
-          jsonlOutside: false,
-          peekedNames: [],
-          tail: null,
-          summary: null,
-          summaryJson: '',
-          lastCheckTick: -Infinity,
-        };
+        // A run known from the index starts from its cached parse (and summary, so an unchanged run
+        // is not re-sent); its files are stat'ed below and re-parsed only if they changed.
+        const seed = this.seeded.get(run.key);
+        entry = this.entryFrom(run, seed?.run);
+        if (seed) {
+          entry.summary = seed.summary;
+          entry.summaryJson = seed.json;
+        }
         this.entries.set(run.key, entry);
+      } else {
+        entry.run = run;
       }
       const e = entry;
       work.push(
@@ -209,6 +253,8 @@ export class RunStore {
         removed.push(key);
       }
     }
+    for (const key of this.seeded.keys()) if (!seen.has(key) && !removed.includes(key)) removed.push(key);
+    this.seeded.clear();
     return { upserts, removed };
   }
 
@@ -234,9 +280,19 @@ export class RunStore {
       e.jsonlOutside = jsonl.outside;
       const jsonlChanged = !sameStamp(jsonlStamp, e.jsonlStamp);
       e.jsonlStamp = jsonlStamp;
-      // Without metrics.json, peek at the head of metrics.jsonl so its metric names are known.
-      if (!e.metrics.value && jsonl.real && (jsonlChanged || metricsChanged) && e.peekedNames.length === 0) {
-        e.peekedNames = await peekJsonlMetricNames(jsonl.real);
+      // Peek at the head of metrics.jsonl for the starting values (and, without metrics.json, the
+      // metric names). The head stops changing once it is full, so it is read again only while the
+      // file is still small or after it shrank (rewritten).
+      const shrank = jsonlStamp !== null && jsonlStamp.size < e.headBytes;
+      if (!jsonl.real) {
+        e.first = {};
+        e.peekedNames = [];
+        e.headBytes = 0;
+      } else if ((jsonlChanged || metricsChanged) && (e.headBytes < PEEK_BYTES || shrank)) {
+        const head = await peekJsonlHead(jsonl.real);
+        e.first = head.first;
+        e.peekedNames = head.names;
+        e.headBytes = head.bytes;
       }
       // Loaded histories are advanced by pollHistory() for plotted runs only.
     }
@@ -265,7 +321,8 @@ export class RunStore {
         hasRunJson,
         params: e.params.value ?? {},
         metrics: e.metrics.value,
-        extraMetricNames: h ? h.metricNames() : e.peekedNames,
+        extraMetricNames: h ? h.metricNames() : e.metrics.value ? [] : e.peekedNames,
+        first: h ? { ...h.firstValues(), ...e.first } : e.first,
         historyStep: h && h.rowCount > 0 ? h.step[h.rowCount - 1]! : null,
         warnings,
       },

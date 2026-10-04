@@ -42,7 +42,7 @@ function renderInspectorPanel(): void {
     return;
   }
   // Re-render only when something shown actually changed (avoids flicker on live refresh).
-  const key = JSON.stringify([run, st.detail, st.s.selected.includes(run.key), st.s.colors[run.key]]);
+  const key = JSON.stringify([run, st.detail, st.s.selected.includes(run.key), st.s.colors[run.key], st.s.showFirst]);
   if (key === inspectorKey) return;
   inspectorKey = key;
   const scroll = shell.inspector.scrollTop;

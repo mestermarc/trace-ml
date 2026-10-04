@@ -33,6 +33,9 @@ const ICONS: Record<string, string> = {
   selected: 'M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0z M8 12l3 3 5-6',
   inbox: 'M22 12h-6l-2 3h-4l-2-3H2 M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z',
   activity: 'M22 12h-4l-3 9L9 3l-3 9H2',
+  trash: 'M3 6h18 M8 6V4h8v2 M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14 M10 11v6 M14 11v6',
+  download: 'M12 3v12 M7 10l5 5 5-5 M4 19h16',
+  grip: 'M9 6h.01 M15 6h.01 M9 12h.01 M15 12h.01 M9 18h.01 M15 18h.01',
 };
 
 export function icon(name: keyof typeof ICONS | string, size = 16): SVGSVGElement {

@@ -2,8 +2,8 @@
   "name": "traceml",
   "displayName": "TraceML",
   "description": "Read-only, filesystem-only viewer for ML training runs (tables, plots, comparison) inside VS Code. Works over Remote-SSH.",
-  "version": "0.1.4",
-  "publisher": "traceml",
+  "version": "0.1.17",
+  "publisher": "mestermarc",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -82,6 +82,11 @@
           "default": 64,
           "minimum": 1,
           "markdownDescription": "At most this many megabytes of each plotted run's `metrics.jsonl` are loaded into memory. Larger files are plotted partially with a warning."
+        },
+        "traceml.cacheDir": {
+          "type": "string",
+          "default": "./traceml/.cache",
+          "markdownDescription": "Folder where TraceML keeps its own files: the remembered view (`ui-state.json`), the run index (`runs-index.json`), runs deleted from TraceML (`hidden-runs.json`), CSV table exports (`exports/`) and PNG plots (`plots/`). A path relative to the (first) workspace folder or an absolute path. This is the only place TraceML writes; run folders are never modified."
         }
       }
     },
@@ -90,7 +95,7 @@
         {
           "id": "traceml",
           "title": "TraceML",
-          "icon": "media/activity.svg"
+          "icon": "media/curly_m.svg"
         }
       ]
     },
@@ -99,7 +104,7 @@
         {
           "id": "traceml.home",
           "name": "Experiments",
-          "icon": "media/activity.svg"
+          "icon": "media/curly_m.svg"
         }
       ]
     },

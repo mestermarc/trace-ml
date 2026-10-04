@@ -68,6 +68,7 @@ describe('buildRunSummary', () => {
     params: { a: 1 },
     metrics: null,
     extraMetricNames: ['train/loss'],
+    first: {},
     historyStep: null,
     warnings: [],
   };

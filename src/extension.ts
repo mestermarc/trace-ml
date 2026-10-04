@@ -1,19 +1,35 @@
 import * as vscode from 'vscode';
 import { listRuns, resolveRunsRoots, type DiscoveredRun, type RunsRoot } from './discovery';
+import { DEFAULT_CACHE_DIR, resolveCacheDirPath } from './cacheDir';
+import { CacheStore } from './cacheStore';
+import { parseHiddenRuns, serializeHiddenRuns, type HiddenRun } from './model/hiddenRuns';
+import { MAX_PNG_BYTES, isPng, pngSize, setPngDpi } from './model/png';
+import { buildTableExport, exportFileName, plotFileName, serializeTableCsv } from './model/tableExport';
 import { READONLY_SCHEME, ReadonlyRunFiles } from './readonlyFs';
-import { joinPath } from './paths';
+import { joinPath, relativePath } from './paths';
+import { parseRunIndex, serializeRunIndex } from './runIndex';
 import { Poller } from './poller';
-import { parseWebviewMessage, type HostToWebview, type WebviewToHost } from './protocol';
+import { parseWebviewMessage, type ExportRequest, type HostToWebview, type WebviewToHost } from './protocol';
 import { RunStore } from './runStore';
 import type { RunSummary, SeriesPayload, ViewConfig } from './types';
 
 const VIEW_TYPE = 'traceml.experiments';
-const UI_STATE_KEY = 'traceml.uiState';
+/** Where versions <= 0.1.8 remembered the view (read once as a fallback, never written). */
+const LEGACY_UI_STATE_KEY = 'traceml.uiState';
 const SERIES_PER_MESSAGE = 16;
+/** The run index is rewritten at most this often while runs change (e.g. during training). */
+const INDEX_SAVE_DELAY_MS = 10_000;
+
+/** True when `key` is a direct sub-folder of the runs folder `rootDir`. */
+function isRunOf(rootDir: string, key: string): boolean {
+  const rel = relativePath(rootDir, key);
+  return rel !== null && rel !== '' && !rel.includes('/');
+}
 
 interface Settings extends ViewConfig {
   roots: string[];
   maxMetricsFileMB: number;
+  cacheDir: string;
 }
 
 function readSettings(): Settings {
@@ -28,6 +44,7 @@ function readSettings(): Settings {
     staleAfterSeconds: num('staleAfterSeconds', 60, 1),
     maxPointsPerSeries: Math.floor(num('maxPointsPerSeries', 5000, 100)),
     maxMetricsFileMB: num('maxMetricsFileMB', 64, 1),
+    cacheDir: c.get<string>('cacheDir', DEFAULT_CACHE_DIR),
   };
 }
 
@@ -57,12 +74,21 @@ class TraceMLController implements vscode.Disposable {
   private readonly output = vscode.window.createOutputChannel('TraceML');
   private readonly disposables: vscode.Disposable[] = [];
   private readonly readonlyFiles = new ReadonlyRunFiles();
+  private lastExport: { file: string; latest: string } | null = null;
+  private lastPlot: string | null = null;
+  /** Runs deleted from TraceML (hidden; never discovered or read again until restored). */
+  private hidden = new Map<string, HiddenRun>();
+  /** The run index and the hidden-runs list are read once, on the first scan. */
+  private cacheLoaded = false;
+  private indexTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly ctx: vscode.ExtensionContext) {
     this.store = new RunStore({
       staleAfterSeconds: this.settings.staleAfterSeconds,
       maxPointsPerSeries: this.settings.maxPointsPerSeries,
-      finishedCheckEvery: 6,
+      // Finished runs are not re-checked on polls, only on a forced refresh (Refresh button,
+      // panel opened, settings changed): their files no longer change.
+      finishedCheckEvery: Number.POSITIVE_INFINITY,
       maxIdleHistories: 8,
       maxMetricsFileBytes: this.settings.maxMetricsFileMB * 1024 * 1024,
     });
@@ -91,26 +117,37 @@ class TraceMLController implements vscode.Disposable {
       retainContextWhenHidden: true,
       localResourceRoots: [vscode.Uri.joinPath(this.ctx.extensionUri, 'dist'), vscode.Uri.joinPath(this.ctx.extensionUri, 'media')],
     });
-    this.attach(panel);
+    void this.attach(panel);
+  }
+
+  /**
+   * TraceML's cache folder (`traceml.cacheDir`, default `<workspace>/traceml/.cache`): remembered
+   * view + table exports. Falls back to VS Code's extension storage when no folder is open.
+   */
+  private cache(): CacheStore {
+    const folders = (vscode.workspace.workspaceFolders ?? []).filter((f) => f.uri.scheme === 'file').map((f) => f.uri.fsPath);
+    const path = resolveCacheDirPath(this.settings.cacheDir, folders);
+    return new CacheStore(path ? vscode.Uri.file(path) : vscode.Uri.joinPath(this.ctx.globalStorageUri, 'cache'));
   }
 
   /** Attaches a new or restored (after window reload) panel. */
-  attach(panel: vscode.WebviewPanel): void {
+  async attach(panel: vscode.WebviewPanel): Promise<void> {
     this.panel = panel;
     this.webviewReady = false;
-    panel.iconPath = vscode.Uri.joinPath(this.ctx.extensionUri, 'media', 'icon.svg');
+    // Tab icon: small line icon (light grey, readable on tab bars); the logo is media/curly_m.svg.
+    panel.iconPath = vscode.Uri.joinPath(this.ctx.extensionUri, 'media', 'activity.svg');
     panel.webview.options = {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.ctx.extensionUri, 'dist'), vscode.Uri.joinPath(this.ctx.extensionUri, 'media')],
     };
-    panel.webview.html = this.html(panel.webview);
+    const remembered = (await this.cache().readUiState()) ?? this.ctx.workspaceState.get(LEGACY_UI_STATE_KEY) ?? null;
+    panel.webview.html = this.html(panel.webview, remembered);
     this.panelDisposables.push(
       panel.webview.onDidReceiveMessage((m) => void this.onMessage(m)),
       panel.onDidDispose(() => this.onPanelDisposed()),
       // Poll only while the panel is visible: a background tab causes no filesystem reads.
       panel.onDidChangeViewState((e) => {
         if (e.webviewPanel.visible) {
-          this.forceNext = true;
           this.poller.start();
         } else {
           this.poller.stop();
@@ -182,6 +219,63 @@ class TraceMLController implements vscode.Disposable {
       roots: this.rootLabels(),
       scanned: this.lastRefreshedAt > 0,
     });
+    if (this.cacheLoaded) this.post({ type: 'hiddenRuns', runs: [...this.hidden.values()] });
+  }
+
+  /**
+   * First scan only: reads the hidden-runs list and the run index from the cache folder, and fills
+   * the table from the index right away (entries outside the current runs folders are ignored).
+   */
+  private async loadCache(): Promise<void> {
+    this.cacheLoaded = true;
+    const cache = this.cache();
+    this.hidden = new Map(parseHiddenRuns(await cache.readHiddenRuns()).map((r) => [r.key, r]));
+    const indexed = parseRunIndex((await cache.readRunsIndex()) ?? '').filter((r) => !this.hidden.has(r.key) && this.roots.some((root) => isRunOf(root.dir, r.key)));
+    this.store.seed(indexed);
+    if (indexed.length) this.output.appendLine(`Loaded ${indexed.length} runs from the run index`);
+    this.sendSnapshot();
+  }
+
+  /** Saves the run index soon (debounced: at most once per INDEX_SAVE_DELAY_MS). */
+  private scheduleIndexSave(): void {
+    if (this.indexTimer) return;
+    this.indexTimer = setTimeout(() => {
+      this.indexTimer = undefined;
+      void this.cache()
+        .writeRunsIndex(serializeRunIndex(this.store.exportIndex()))
+        .catch((e) => this.output.appendLine(`Could not save the run index: ${e instanceof Error ? e.message : String(e)}`));
+    }, INDEX_SAVE_DELAY_MS);
+  }
+
+  private async saveHidden(): Promise<void> {
+    await this.cache().writeHiddenRuns(serializeHiddenRuns(this.hidden.values()));
+    this.post({ type: 'hiddenRuns', runs: [...this.hidden.values()] });
+  }
+
+  /** Deletes runs from TraceML: they are hidden and no longer read. Their folders are not touched. */
+  private async hideRuns(keys: string[]): Promise<void> {
+    const byKey = new Map(this.store.summaries().map((r) => [r.key, r]));
+    const hiddenAt = new Date().toISOString();
+    const added: string[] = [];
+    for (const key of keys) {
+      const r = byKey.get(key);
+      if (!r || this.hidden.has(key)) continue;
+      this.hidden.set(key, { key, id: r.id, name: r.name, location: r.location, hiddenAt });
+      added.push(key);
+    }
+    if (!added.length) return;
+    await this.saveHidden();
+    this.output.appendLine(`Deleted ${added.length} run${added.length === 1 ? '' : 's'} from TraceML (folders not modified)`);
+    this.post({ type: 'runsPatch', upserts: [], removed: added, refreshedAt: Date.now() });
+    this.poller.trigger();
+  }
+
+  private async unhideRuns(keys: string[]): Promise<void> {
+    let n = 0;
+    for (const key of keys) if (this.hidden.delete(key)) n++;
+    if (!n) return;
+    await this.saveHidden();
+    this.poller.trigger();
   }
 
   // ---------------------------------------------------------------------------
@@ -197,6 +291,7 @@ class TraceMLController implements vscode.Disposable {
       .map((f) => ({ name: f.name, fsPath: f.uri.fsPath }));
     const res = await resolveRunsRoots(folders, this.settings.roots);
     this.roots = res.roots;
+    if (!this.cacheLoaded) await this.loadCache();
     const rootsKey = JSON.stringify([res.roots, res.problems]);
     const rootsChanged = force || rootsKey !== this.rootsKey;
     this.rootsKey = rootsKey;
@@ -213,6 +308,7 @@ class TraceMLController implements vscode.Disposable {
     const seen = new Set<string>();
     for (const root of this.roots) {
       for (const run of await listRuns(root, known)) {
+        if (this.hidden.has(run.key)) continue;
         if (!seen.has(run.key)) {
           seen.add(run.key);
           discovered.push(run);
@@ -221,6 +317,7 @@ class TraceMLController implements vscode.Disposable {
     }
 
     const { upserts, removed } = await this.store.sync(discovered, { force });
+    if (upserts.length || removed.length || force) this.scheduleIndexSave();
     const byKey = new Map<string, RunSummary>(upserts.map((u) => [u.key, u]));
 
     // Advance metric histories of plotted runs only.
@@ -276,8 +373,40 @@ class TraceMLController implements vscode.Disposable {
           this.refresh();
           break;
         case 'saveState':
-          // VS Code's own per-workspace storage (not a file in the workspace).
-          await this.ctx.workspaceState.update(UI_STATE_KEY, msg.state);
+          // Remembered view: <cache>/ui-state.json (fixed name, settings only, no run data).
+          await this.cache()
+            .writeUiState(msg.state)
+            .catch((e) => this.output.appendLine(`Could not save the view state: ${e instanceof Error ? e.message : String(e)}`));
+          break;
+        case 'exportTable':
+          await this.exportTable(msg.request);
+          break;
+        case 'copyExportPath':
+          if (this.lastExport) {
+            await vscode.env.clipboard.writeText(this.lastExport.file);
+            vscode.window.setStatusBarMessage('TraceML: export path copied', 3000);
+          }
+          break;
+        case 'openExport':
+          if (this.lastExport) await vscode.commands.executeCommand('vscode.open', this.readonlyFiles.uriFor(this.lastExport.file), { preview: true });
+          break;
+        case 'hideRuns':
+          await this.hideRuns(msg.runKeys);
+          break;
+        case 'unhideRuns':
+          await this.unhideRuns(msg.runKeys);
+          break;
+        case 'savePlot':
+          await this.savePlot(msg.title, msg.data);
+          break;
+        case 'copyPlotPath':
+          if (this.lastPlot) {
+            await vscode.env.clipboard.writeText(this.lastPlot);
+            vscode.window.setStatusBarMessage('TraceML: plot path copied', 3000);
+          }
+          break;
+        case 'openPlot':
+          if (this.lastPlot) await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(this.lastPlot), { preview: true });
           break;
         case 'openSettings':
           await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:traceml.traceml');
@@ -316,6 +445,45 @@ class TraceMLController implements vscode.Disposable {
     this.sendSeries(keys);
   }
 
+  /**
+   * Writes the rows the table shows as CSV into TraceML's cache folder. Rows are rebuilt from the
+   * host's run data; only keys, column ids and view settings come from the webview. Run data is
+   * never modified.
+   */
+  private async exportTable(request: ExportRequest): Promise<void> {
+    const runs = new Map(this.store.summaries().map((r) => [r.key, r]));
+    const dirs = new Map([...runs.keys()].map((k) => [k, this.store.dirOf(k) ?? k]));
+    const now = new Date();
+    const table = buildTableExport(request, runs, dirs);
+    try {
+      const { file, latest } = await this.cache().writeExport(exportFileName(now), serializeTableCsv(table));
+      this.lastExport = { file: file.fsPath, latest: latest.fsPath };
+      this.output.appendLine(`Exported ${table.rows.length} rows to ${file.fsPath}`);
+      this.post({ type: 'exported', path: file.fsPath, latestPath: latest.fsPath, rows: table.rows.length, exportedAt: now.toISOString() });
+    } catch (e) {
+      this.reportError('Export failed', e);
+    }
+  }
+
+  /** Saves a plot rendered by the webview (PNG, 300 DPI) into `<cache>/plots/`. */
+  private async savePlot(title: string, base64: string): Promise<void> {
+    const bytes = new Uint8Array(Buffer.from(base64, 'base64'));
+    if (bytes.length > MAX_PNG_BYTES || !isPng(bytes)) {
+      this.reportError('Save plot failed', 'the rendered image is not a valid PNG');
+      return;
+    }
+    try {
+      const png = setPngDpi(bytes);
+      const file = await this.cache().writePlot(plotFileName(title, new Date()), png);
+      this.lastPlot = file.fsPath;
+      const { width, height } = pngSize(png);
+      this.output.appendLine(`Saved plot ${width}x${height} px to ${file.fsPath}`);
+      this.post({ type: 'plotSaved', path: file.fsPath, width, height });
+    } catch (e) {
+      this.reportError('Save plot failed', e);
+    }
+  }
+
   /** Opens a run file read-only (only the fixed file names, only inside the run folder). */
   private async openFile(runKey: string, file: string): Promise<void> {
     const real = await this.store.resolveRunFile(runKey, file);
@@ -332,7 +500,7 @@ class TraceMLController implements vscode.Disposable {
     this.post({ type: 'error', message });
   }
 
-  private html(webview: vscode.Webview): string {
+  private html(webview: vscode.Webview, remembered: unknown): string {
     const n = nonce();
     const script = webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, 'dist', 'webview.js'));
     const style = webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, 'dist', 'webview.css'));
@@ -344,7 +512,7 @@ class TraceMLController implements vscode.Disposable {
       `script-src 'nonce-${n}'`,
     ].join('; ');
     // Remembered UI state, embedded as inert JSON data (not executable; '<' escaped).
-    const uiState = JSON.stringify(this.ctx.workspaceState.get(UI_STATE_KEY) ?? null).replace(/</g, '\\u003c');
+    const uiState = JSON.stringify(remembered ?? null).replace(/</g, '\\u003c');
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -352,6 +520,7 @@ class TraceMLController implements vscode.Disposable {
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="${style}">
+<meta name="traceml-logo" content="${webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, 'media', 'curly_m.svg'))}">
 <title>TraceML</title>
 </head>
 <body>
@@ -364,6 +533,7 @@ class TraceMLController implements vscode.Disposable {
 
   dispose(): void {
     this.poller.stop();
+    if (this.indexTimer) clearTimeout(this.indexTimer);
     this.panel?.dispose();
     this.disposables.forEach((d) => d.dispose());
   }

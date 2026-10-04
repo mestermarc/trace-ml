@@ -5,6 +5,7 @@ import { groupLabel } from '../model/analysis';
 import { emaSmooth, seriesXY, type XMode } from '../model/metricSeries';
 import type { RunSummary } from '../types';
 import { cssVar, formatClock, formatNumber, h, palette, withAlpha } from './dom';
+import { EXPORT_SCALE, composePng } from './pngExport';
 import { MAX_PLOT_RUNS, seriesId, type AppState, type Area } from './state';
 import { button, chip, emptyState, openPopover, toggle } from './ui';
 
@@ -61,16 +62,19 @@ class ChartCard {
   private smoothing = 0;
   private focusedSeries = -1;
   private noteKey = '';
+  /** What the chart currently shows, so it can be re-rendered at export resolution. */
+  private shown: { data: uPlot.AlignedData; xMode: XMode; logY: boolean; smooth: boolean } | null = null;
 
-  constructor(readonly metric: string, onRemove: () => void) {
+  constructor(readonly metric: string, onRemove: () => void, onExport: () => void) {
     this.info = h('span', { class: 'chart-info' });
     this.note = h('div', { class: 'chart-note' });
     this.body = h('div', { class: 'chart-body', title: 'Drag to zoom · double-click to reset' }, this.note);
     const remove = button({ icon: 'close', title: `Remove ${metric}`, variant: 'ghost', cls: 'chart-remove', onClick: onRemove });
+    const png = button({ icon: 'download', title: `Save ${metric} as PNG (300 DPI)`, variant: 'ghost', cls: 'chart-remove', onClick: onExport });
     this.el = h(
       'article',
       { class: 'chart-card', 'aria-label': `Chart ${metric}` },
-      h('header', { class: 'chart-head' }, h('span', { class: 'chart-group' }, metricGroup(metric)), h('span', { class: 'chart-title' }, metricShort(metric)), h('span', { class: 'spacer' }), this.info, remove),
+      h('header', { class: 'chart-head' }, h('span', { class: 'chart-group' }, metricGroup(metric)), h('span', { class: 'chart-title' }, metricShort(metric)), h('span', { class: 'spacer' }), this.info, png, remove),
       this.body,
     );
   }
@@ -102,6 +106,7 @@ class ChartCard {
     this.info.title = `${points} points drawn${downsampled ? `; series longer than ${st.config.maxPointsPerSeries} points use min/max-preserving downsampling` : ''}`;
 
     if (lines.length === 0) {
+      this.shown = null;
       this.destroy();
       const key = loading ? 'loading' : 'none';
       if (key !== this.noteKey) {
@@ -124,6 +129,7 @@ class ChartCard {
     const xs = data[0] as number[];
     const extent: [number, number] | null = xs.length ? [xs[0]!, xs[xs.length - 1]!] : null;
 
+    this.shown = { data, xMode, logY, smooth };
     const sig = JSON.stringify([xMode, logY, smooth, lines.map((l) => [l.run.key, l.color, l.run.name]), themeVersion]);
     const width = Math.max(200, this.body.clientWidth || 400);
     if (this.chart && sig === this.sig) {
@@ -145,31 +151,37 @@ class ChartCard {
     this.chart.over.append(this.tooltip);
   }
 
-  private options(lines: RunLine[], xMode: XMode, logY: boolean, smooth: boolean, width: number): uPlot.Options {
+  /**
+   * uPlot options. `k` scales every size (fonts, strokes, axis sizes) for the PNG export, where the
+   * chart is drawn `k` times larger than on screen.
+   */
+  private options(lines: RunLine[], xMode: XMode, logY: boolean, smooth: boolean, width: number, k = 1): uPlot.Options {
     const t = chartTheme();
     const series: uPlot.Series[] = [{ label: X_LABEL[xMode] }];
     for (const l of lines) {
-      if (smooth) series.push({ label: `${l.run.name} (raw)`, stroke: withAlpha(l.color, 0.25), width: 1, points: { show: false } });
-      series.push({ label: l.run.name, stroke: l.color, width: smooth ? 2 : 1.6, points: { size: 5, fill: l.color } });
+      if (smooth) series.push({ label: `${l.run.name} (raw)`, stroke: withAlpha(l.color, 0.25), width: 1 * k, points: { show: false } });
+      series.push({ label: l.run.name, stroke: l.color, width: (smooth ? 2 : 1.6) * k, points: { size: 5 * k, fill: l.color } });
     }
     const axis = (values?: uPlot.Axis['values']): uPlot.Axis => ({
       stroke: t.axis,
-      font: t.font,
-      grid: { stroke: t.grid, width: 1 },
+      font: t.font.replace(/(\d+(?:\.\d+)?)px/, (_m, n: string) => `${Number(n) * k}px`),
+      grid: { stroke: t.grid, width: 1 * k },
       ticks: { show: false },
       border: { show: false },
+      gap: 5 * k,
       values,
     });
     return {
       width,
-      height: CHART_H,
+      height: CHART_H * k,
       legend: { show: false },
       focus: { alpha: 0.28 },
-      padding: [10, 8, 0, 0],
+      padding: [10 * k, 8 * k, 0, 0],
       scales: { x: { time: false }, y: { distr: logY ? 3 : 1 } },
       axes: [
-        { ...axis(xMode === 'wall' ? (_u, vals) => vals.map((v) => (v === null ? '' : formatClock(v))) : undefined), size: 34 },
-        { ...axis((_u, vals) => vals.map((v) => (v === null ? '' : formatNumber(v)))), size: 54 },
+        // `space` = min px between ticks (uPlot defaults 50 / 30), scaled so the PNG keeps the on-screen tick density
+        { ...axis(xMode === 'wall' ? (_u, vals) => vals.map((v) => (v === null ? '' : formatClock(v))) : undefined), size: 34 * k, space: 50 * k },
+        { ...axis((_u, vals) => vals.map((v) => (v === null ? '' : formatNumber(v)))), size: 54 * k, space: 30 * k },
       ],
       series,
       cursor: { sync: { key: 'traceml' }, drag: { x: true, y: false }, points: { size: 7 }, focus: { prox: 24 } },
@@ -226,6 +238,49 @@ class ChartCard {
     const overW = u.over.clientWidth;
     tip.style.left = `${left + 16 + w > overW ? Math.max(0, left - w - 16) : left + 16}px`;
     tip.style.top = `${Math.max(0, Math.min(top + 12, u.over.clientHeight - tip.offsetHeight))}px`;
+  }
+
+  /**
+   * Renders the chart off-screen at 300 DPI (keeping the current zoom) and returns the composed PNG
+   * as base64, or null when there is nothing to export.
+   */
+  async toPng(subtitle: string): Promise<string | null> {
+    if (!this.chart || !this.shown) return null;
+    const { data, xMode, logY, smooth } = this.shown;
+    const width = this.chart.width;
+    // uPlot already multiplies by the device pixel ratio; scale the rest so pixels = CSS px * 300/96.
+    const pxRatio = (uPlot as unknown as { pxRatio?: number }).pxRatio || window.devicePixelRatio || 1;
+    const k = EXPORT_SCALE / pxRatio;
+    const opts = this.options(this.lines, xMode, logY, smooth, width * k, k);
+    const sx = this.chart.scales.x;
+    const sy = this.chart.scales.y;
+    opts.cursor = { show: false };
+    opts.hooks = {};
+    const host = h('div', { class: 'png-render', 'aria-hidden': 'true' });
+    document.body.append(host);
+    try {
+      const drawn = new Promise<void>((resolve) => {
+        opts.hooks = { draw: [() => resolve()] };
+        setTimeout(resolve, 2000);
+      });
+      const u = new uPlot(opts, data, host);
+      if (sx?.min != null && sx.max != null) u.setScale('x', { min: sx.min, max: sx.max });
+      if (sy?.min != null && sy.max != null && !logY) u.setScale('y', { min: sy.min, max: sy.max });
+      await drawn;
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+      const png = composePng({
+        title: this.metric,
+        subtitle,
+        chart: u.ctx.canvas,
+        width,
+        height: CHART_H,
+        legend: this.lines.map((l) => ({ color: l.color, label: l.run.name })),
+      });
+      u.destroy();
+      return png;
+    } finally {
+      host.remove();
+    }
   }
 
   resize(): void {
@@ -415,6 +470,19 @@ export class Plots {
     );
   }
 
+  /** Saves one chart as a 300 DPI PNG in TraceML's cache folder. */
+  private async exportCard(card: ChartCard): Promise<void> {
+    const p = this.st.s.plot;
+    const subtitle = [`x: ${X_LABEL[p.xMode].toLowerCase()}`, p.logY ? 'log y' : '', p.smoothing > 0 ? `smoothing ${p.smoothing}` : ''].filter(Boolean).join(' · ');
+    try {
+      const png = await card.toPng(subtitle);
+      if (png) this.st.savePlot(card.metric, png);
+      else this.st.showError('Nothing to export: the chart has no data yet.');
+    } catch (e) {
+      this.st.showError(`Could not render the PNG: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   private renderLegend(): void {
     const colorFor = this.colorResolver();
     const groupField = this.st.s.plot.colorBy === 'group' ? this.st.s.groupBy : null;
@@ -475,7 +543,12 @@ export class Plots {
     wanted.forEach((m, i) => {
       let card = this.cards.get(m);
       if (!card) {
-        card = new ChartCard(m, () => this.setMetrics(this.st.plotMetrics().filter((x) => x !== m)));
+        const c: ChartCard = new ChartCard(
+          m,
+          () => this.setMetrics(this.st.plotMetrics().filter((x) => x !== m)),
+          () => void this.exportCard(c),
+        );
+        card = c;
         this.cards.set(m, card);
       }
       if (this.grid.children[i] !== card.el) this.grid.insertBefore(card.el, this.grid.children[i] ?? null);

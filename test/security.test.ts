@@ -29,6 +29,7 @@ describe('TraceML source is read-only', () => {
 
   it('calls only read-only fs functions', () => {
     for (const { file, text } of ALL) {
+      if (file === 'cacheStore.ts') continue; // checked separately below (TraceML cache folder only)
       for (const m of text.matchAll(/\bfs\.(\w+)\s*\(/g)) {
         expect(ALLOWED_FS_CALLS.has(m[1]!), `${file} calls fs.${m[1]}`).toBe(true);
       }
@@ -43,9 +44,39 @@ describe('TraceML source is read-only', () => {
     }
   });
 
-  it('uses no VS Code write / edit APIs', () => {
+  it('uses no VS Code write / edit APIs outside the cache module', () => {
     const forbidden = /workspace\.fs\.(writeFile|delete|rename|copy|createDirectory)|WorkspaceEdit|applyEdit|\.save\(|saveAll/;
-    for (const { file, text } of ALL) expect(forbidden.test(text), file).toBe(false);
+    for (const { file, text } of ALL) {
+      if (file === 'cacheStore.ts') continue;
+      expect(forbidden.test(text), file).toBe(false);
+    }
+  });
+
+  it('the cache module only writes fixed file names inside the cache folder', () => {
+    const c = ALL.find((x) => x.file === 'cacheStore.ts')!.text;
+    expect(c).toMatch(/this\.exportsDir = vscode\.Uri\.joinPath\(dir, 'exports'\)/);
+    expect(c).toMatch(/this\.plotsDir = vscode\.Uri\.joinPath\(dir, 'plots'\)/);
+    // every write / delete / mkdir targets the cache folder or a fixed name joined onto it
+    const allowedTargets = ['this.dir', 'this.exportsDir', 'this.plotsDir', 'file', 'latest', 'ui', 'idx', 'hidden', 'vscode.Uri.joinPath(dir'];
+    const calls = [...c.matchAll(/workspace\.fs\.(writeFile|delete|createDirectory)\(([^,)]*)/g)];
+    expect(calls.length).toBeGreaterThan(0);
+    for (const m of calls) expect(allowedTargets, `${m[1]}(${m[2]})`).toContain(m[2]!.trim());
+    expect(c).toMatch(/const ui = vscode\.Uri\.joinPath\(this\.dir, UI_STATE_FILE\)/);
+    expect(c).toMatch(/const idx = vscode\.Uri\.joinPath\(this\.dir, RUNS_INDEX_FILE\)/);
+    expect(c).toMatch(/const hidden = vscode\.Uri\.joinPath\(this\.dir, HIDDEN_RUNS_FILE\)/);
+    expect(c).toMatch(/if \(!EXPORT_NAME\.test\(name\)\) throw/);
+    expect(c).toMatch(/if \(!PLOT_NAME\.test\(name\)\) throw/);
+    // prune() only deletes files of the folder it lists that match the strict name pattern
+    expect(c).toMatch(/\.filter\(\(\[n, t\]\) => t === vscode\.FileType\.File && pattern\.test\(n\)\)/);
+    expect(c.match(/this\.prune\(/g)).toHaveLength(2);
+    expect(c).toMatch(/this\.prune\(this\.exportsDir, EXPORT_NAME, KEEP_EXPORTS\)/);
+    expect(c).toMatch(/this\.prune\(this\.plotsDir, PLOT_NAME, KEEP_PLOTS\)/);
+    expect(c).not.toMatch(/\.rename\(|\.copy\(/);
+    // the store is only created from the resolved cache setting (or VS Code's extension storage)
+    const ext = ALL.find((x) => x.file === 'extension.ts')!.text;
+    expect(ext.match(/new CacheStore\(/g)).toHaveLength(1);
+    expect(ext).toMatch(/new CacheStore\(path \? vscode\.Uri\.file\(path\) : vscode\.Uri\.joinPath\(this\.ctx\.globalStorageUri, 'cache'\)\)/);
+    expect(ext).toMatch(/const path = resolveCacheDirPath\(this\.settings\.cacheDir, folders\)/);
   });
 
   it('starts no processes and makes no network calls', () => {

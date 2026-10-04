@@ -2,7 +2,9 @@
 !dist/extension.js
 !dist/webview.js
 !dist/webview.css
-!media/**
+!media/curly_m.svg
+!media/activity.svg
+!media/extension_logo.png
 !package.json
 !README.md
 !LICENSE

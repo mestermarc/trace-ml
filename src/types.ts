@@ -100,6 +100,8 @@ export interface RunSummary {
   last: Record<string, number | null>;
   best: Record<string, BestMetric>;
   summary: Record<string, Scalar>;
+  /** Starting value of each metric: its first non-null value in metrics.jsonl (head of the file). */
+  first: Record<string, number | null>;
   /** Metric names known without reading metrics.jsonl, plus names from a loaded metrics.jsonl. */
   metricNames: string[];
   /** Human-readable problems: corrupt files, newer schema, malformed metric lines... */

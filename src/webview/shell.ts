@@ -2,6 +2,7 @@
 // host and the run inspector panel.
 import { DISPLAY_STATUSES, type DisplayStatus } from '../types';
 import { formatTimeFull, h } from './dom';
+import { openHiddenRuns } from './filters';
 import type { AppState, AppView, Area } from './state';
 import { button, icon } from './ui';
 
@@ -15,6 +16,12 @@ const NAV: { id: AppView; label: string; icon: string }[] = [
 export function rootFilterExpr(root: string): string {
   const escaped = root.replace(/[.*+?^${}()|[\]\\/]/g, (c) => '\\' + c);
   return '/^' + escaped + '\\//';
+}
+
+/** TraceML logo (media/curly_m.svg, shown white by CSS), sized by CSS; falls back to a line icon. */
+function brandLogo(): Node {
+  const src = document.querySelector<HTMLMetaElement>('meta[name="traceml-logo"]')?.content;
+  return src ? h('img', { src, alt: 'TraceML logo', class: 'brand-logo' }) : icon('activity', 16);
 }
 
 const TITLES: Record<AppView, string> = { overview: 'Overview', runs: 'Runs', compare: 'Compare' };
@@ -32,6 +39,8 @@ export class Shell {
   private readonly refreshed = h('span', { class: 'refreshed' });
   private readonly refreshBtn: HTMLButtonElement;
   private readonly errorBar = h('div', { class: 'error-bar', role: 'alert' });
+  private readonly noticeBar = h('div', { class: 'export-bar notice-bar', role: 'status' });
+  private noticeKey = '';
   private readonly views = new Map<AppView, HTMLElement>();
   private sideKey = '';
 
@@ -43,7 +52,7 @@ export class Shell {
     this.sidebar = h(
       'aside',
       { class: 'sidebar', 'aria-label': 'Sidebar' },
-      h('div', { class: 'brand' }, h('span', { class: 'brand-mark', 'aria-hidden': 'true' }, icon('activity', 16)), h('span', { class: 'brand-name' }, 'TraceML'), collapseBtn),
+      h('div', { class: 'brand' }, h('span', { class: 'brand-mark', 'aria-hidden': 'true' }, brandLogo()), h('span', { class: 'brand-name' }, 'TraceML'), collapseBtn),
       this.navEl,
       h('div', { class: 'side-sep' }),
       h('div', { class: 'side-section' }, h('div', { class: 'side-title' }, 'Run roots'), this.rootsEl),
@@ -65,6 +74,7 @@ export class Shell {
       this.refreshBtn,
     );
     this.errorBar.hidden = true;
+    this.noticeBar.hidden = true;
     this.viewHost = h('main', { class: 'view-host', id: 'main' });
     this.inspector = h('aside', { class: 'inspector', 'aria-label': 'Run details' });
     this.inspector.hidden = true;
@@ -72,7 +82,7 @@ export class Shell {
       'div',
       { class: 'shell' },
       this.sidebar,
-      h('div', { class: 'main' }, header, this.errorBar, h('div', { class: 'main-body' }, this.viewHost, this.inspector)),
+      h('div', { class: 'main' }, header, this.errorBar, this.noticeBar, h('div', { class: 'main-body' }, this.viewHost, this.inspector)),
     );
 
     // Auto-collapse to an icon rail when the panel is narrow.
@@ -102,6 +112,7 @@ export class Shell {
     this.renderHeader();
     this.renderRefreshed();
     this.renderError();
+    this.renderNotice();
     const collapseBtn = this.sidebar.querySelector<HTMLButtonElement>('.collapse-btn');
     if (collapseBtn) {
       collapseBtn.title = this.st.s.sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar';
@@ -194,6 +205,49 @@ export class Shell {
     );
     this.refreshed.title = `Polling every ${this.st.config.refreshIntervalSeconds}s`;
     this.refreshBtn.disabled = this.st.refreshing;
+  }
+
+  /** Result of the last export / plot save / delete, with Copy path / Open / Undo actions. */
+  private renderNotice(): void {
+    const n = this.st.notice;
+    const key = JSON.stringify([n, this.st.hiddenRuns.length]);
+    if (key === this.noticeKey) return;
+    this.noticeKey = key;
+    this.noticeBar.hidden = !n;
+    if (!n) return;
+    const dismiss = button({ icon: 'close', title: 'Dismiss', variant: 'ghost', onClick: () => {
+      this.st.notice = null;
+      this.st.changed('status');
+    } });
+    const path = (p: string, title: string) => h('code', { class: 'export-path', title }, p);
+    let parts: (Node | string)[];
+    if (n.kind === 'export') {
+      parts = [
+        icon('file', 15),
+        h('span', {}, `Exported ${n.rows} row${n.rows === 1 ? '' : 's'} as CSV to `),
+        path(n.path, 'Give this path to an agent'),
+        button({ label: 'Copy path', icon: 'check', variant: 'secondary', cls: 'btn-small', onClick: () => this.st.post({ type: 'copyExportPath' }) }),
+        button({ label: 'Open', variant: 'ghost', cls: 'btn-small', title: 'Open the CSV (read-only)', onClick: () => this.st.post({ type: 'openExport' }) }),
+      ];
+    } else if (n.kind === 'plot') {
+      parts = [
+        icon('download', 15),
+        h('span', {}, `Saved PNG (${n.width}×${n.height} px, 300 DPI) to `),
+        path(n.path, 'Saved plot'),
+        button({ label: 'Copy path', icon: 'check', variant: 'secondary', cls: 'btn-small', onClick: () => this.st.post({ type: 'copyPlotPath' }) }),
+        button({ label: 'Open', variant: 'ghost', cls: 'btn-small', title: 'Open the image', onClick: () => this.st.post({ type: 'openPlot' }) }),
+      ];
+    } else {
+      const what = n.names.length === 1 ? `“${n.names[0]}”` : `${n.names.length} runs`;
+      const listBtn: HTMLButtonElement = button({ label: `Deleted runs (${this.st.hiddenRuns.length})`, variant: 'ghost', cls: 'btn-small', onClick: () => openHiddenRuns(this.st, listBtn) });
+      parts = [
+        icon('trash', 15),
+        h('span', {}, `Deleted ${what} from TraceML. The run folder${n.names.length === 1 ? ' was' : 's were'} not touched.`),
+        button({ label: 'Undo', variant: 'secondary', cls: 'btn-small', onClick: () => this.st.unhideRuns(n.keys) }),
+        listBtn,
+      ];
+    }
+    this.noticeBar.replaceChildren(...parts, h('span', { class: 'spacer' }), dismiss);
   }
 
   private renderError(): void {

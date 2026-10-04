@@ -6,6 +6,7 @@ import { barData, boxData, logTicks, niceTicks, NONE_GROUP, scatterData, type Ba
 import { parseColumnId } from '../model/run';
 import { cssVar, formatDuration, formatNumber, formatTime, h, palette, withAlpha } from './dom';
 import { fieldOptions } from './filters';
+import { composePng, legendFromDom, rasterizeSvg } from './pngExport';
 import type { Plots } from './plots';
 import type { AppState, Area } from './state';
 import { button, emptyState, icon, toggle } from './ui';
@@ -129,10 +130,25 @@ export class Analysis {
     const collapsed = new Set(st.s.analysis.collapsed);
     const sections = SECTIONS.map((sec) => {
       const scope = h('span', { class: 'viz-scope' });
+      const id = sec.id;
+      const png =
+        id === 'line'
+          ? null
+          : button({
+              icon: 'download',
+              title: `Save the ${sec.title.toLowerCase()} chart as PNG (300 DPI)`,
+              variant: 'ghost',
+              cls: 'viz-png',
+              onClick: (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                void this.exportChart(id);
+              },
+            });
       const details = h(
         'details',
         { class: 'viz-section', open: !collapsed.has(sec.id) },
-        h('summary', {}, icon('chevronRight', 14), icon(sec.icon, 15), h('h2', {}, sec.title), h('span', { class: 'viz-hint' }, sec.hint), h('span', { class: 'spacer' }), scope),
+        h('summary', {}, icon('chevronRight', 14), icon(sec.icon, 15), h('h2', {}, sec.title), h('span', { class: 'viz-hint' }, sec.hint), h('span', { class: 'spacer' }), scope, png),
         sec.id === 'line' ? plots.el : this.charts[sec.id].body,
       ) as HTMLDetailsElement;
       details.addEventListener('toggle', () => {
@@ -283,6 +299,24 @@ export class Analysis {
       if (key === c.renderedKey) return;
       c.renderedKey = key;
       this.drawBar(c, data, r.barField, r.barGroup, mode, b.mode === 'groups' && !r.barGroup, width, runs.length);
+    }
+  }
+
+  /** Saves a scatter / box / bar chart as a 300 DPI PNG in TraceML's cache folder. */
+  private async exportChart(kind: RunLevelKind): Promise<void> {
+    const c = this.charts[kind];
+    const svg = c.chartBox.querySelector('svg');
+    if (!svg) {
+      this.st.showError('Nothing to export: open the section and make sure the chart shows data.');
+      return;
+    }
+    try {
+      const { canvas, width, height } = await rasterizeSvg(svg);
+      const title = svg.getAttribute('aria-label') || kind;
+      const png = composePng({ title, subtitle: (c.info.textContent ?? '').replace(/\s*·\s*click[^·]*/gi, '').trim() || undefined, chart: canvas, width, height, legend: legendFromDom(c.legend) });
+      this.st.savePlot(title, png);
+    } catch (e) {
+      this.st.showError(`Could not render the PNG: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 

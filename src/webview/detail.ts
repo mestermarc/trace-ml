@@ -1,5 +1,6 @@
 // Run inspector: a side panel with the most useful information first (status, overview, key
-// metrics), then error, parameters, metrics, run info, configuration and file actions.
+// metrics), then error, the logged values (run metrics, summary, config), run info, the full
+// config.json and file actions.
 import type { RunDetail, RunFileName, RunSummary } from '../types';
 import { formatDuration, formatNumber, formatScalar, formatTimeFull, h, palette, relativeAge } from './dom';
 import type { AppState } from './state';
@@ -12,6 +13,7 @@ const FILE_BUTTONS: RunFileName[] = ['params.yaml', 'config.json', 'metrics.json
 const sectionOpen = new Map<string, boolean>([
   ['Run info', false],
   ['Last values', false],
+  ['Starting values', false],
 ]);
 
 function section(title: string, body: Node | null, opts: { count?: number; cls?: string } = {}): HTMLElement | null {
@@ -99,7 +101,18 @@ export function renderInspector(st: AppState, run: RunSummary, detail: RunDetail
       [run.group, run.startedAt !== null ? formatTimeFull(run.startedAt) : null, run.tags.length ? run.tags.map((t) => `#${t}`).join(' ') : null].filter(Boolean).join('  ·  ') || 'no metadata',
     ),
     h('div', { class: 'insp-id mono', title: run.location }, run.id),
-    h('div', { class: 'insp-actions' }, selectBtn),
+    h(
+      'div',
+      { class: 'insp-actions' },
+      selectBtn,
+      button({
+        label: 'Delete',
+        icon: 'trash',
+        variant: 'ghost',
+        title: 'Delete this run from TraceML. It is only hidden: the run folder and its files are not touched, and it can be restored (Undo, or More → Deleted runs).',
+        onClick: () => st.hideRuns([run.key]),
+      }),
+    ),
   );
 
   // -- problems -----------------------------------------------------------------
@@ -160,6 +173,7 @@ export function renderInspector(st: AppState, run: RunSummary, detail: RunDetail
   );
   const summaryRows = Object.entries(run.summary).map(([k, v]) => h('tr', {}, h('th', {}, k), h('td', { class: 'num' }, formatScalar(v) || '—'), h('td', {})));
   const lastRows = Object.entries(run.last).map(([k, v]) => h('tr', {}, h('th', {}, k), h('td', { class: 'num' }, formatScalar(v) || '—'), h('td', {})));
+  const firstRows = st.s.showFirst ? Object.entries(run.first).map(([k, v]) => h('tr', {}, h('th', {}, k), h('td', { class: 'num' }, formatScalar(v) || '—'), h('td', {}))) : [];
   const table = (rows: HTMLElement[]) => (rows.length ? h('table', { class: 'metric-table' }, h('tbody', {}, ...rows)) : null);
 
   // -- run info -----------------------------------------------------------------
@@ -213,10 +227,11 @@ export function renderInspector(st: AppState, run: RunSummary, detail: RunDetail
       section('Overview', overview),
       noMetrics
         ? section('Metrics', h('div', { class: 'muted' }, 'No metrics.json summary in this run.'))
-        : section('Metrics', h('div', {}, bestRows.length ? h('h3', {}, 'Best') : null, table(bestRows), summaryRows.length ? h('h3', {}, 'Summary') : null, table(summaryRows))),
+        : section('Metrics', h('div', {}, bestRows.length ? h('h3', {}, 'Run · best') : null, table(bestRows), summaryRows.length ? h('h3', {}, 'Summary') : null, table(summaryRows))),
+      firstRows.length ? section('Starting values', table(firstRows), { count: firstRows.length }) : null,
       lastRows.length ? section('Last values', table(lastRows), { count: lastRows.length }) : null,
-      section('Parameters', params ?? h('div', { class: 'muted' }, 'No params.yaml in this run.'), { count: paramEntries.length }),
-      section('Configuration', config),
+      section('Config', params ?? h('div', { class: 'muted' }, 'No params.yaml in this run.'), { count: paramEntries.length }),
+      section('Full config (config.json)', config),
       section('Run info', info),
       section('Files', files),
     ),

@@ -4,15 +4,71 @@ import { defaultVisibleColumns, parseColumnFilter, selectFiltered } from '../mod
 import type { ColumnDef } from '../model/run';
 import { DISPLAY_STATUSES, type DisplayStatus } from '../types';
 import { h } from './dom';
-import type { AppState, Area } from './state';
+import { MAX_ROWS_LIMIT, parseMaxRows, type AppState, type Area } from './state';
 import { button, chip, icon, menu, openPopover, toggle } from './ui';
 
-export const KIND_TITLES: Record<ColumnDef['kind'], string> = { fixed: 'Run', param: 'Parameters', last: 'Last', best: 'Best', summary: 'Summary' };
+/**
+ * Section titles of the column kinds. Logged values form three groups: Config (params.yaml), Run
+ * (metric history: start / last / best value) and Summary (final values).
+ */
+export const KIND_TITLES: Record<ColumnDef['kind'], string> = { fixed: 'Run info', param: 'Config', first: 'Run · start value', last: 'Run · last value', best: 'Run · best value', summary: 'Summary' };
 
 /** Human label of a column for chips / menus. */
 export function columnLabel(c: ColumnDef): string {
   if (c.kind === 'last' || c.kind === 'best') return `${c.kind} ${c.key}`;
   return c.label;
+}
+
+/** Popover listing the runs deleted from TraceML, with Restore actions. */
+export function openHiddenRuns(st: AppState, anchor: HTMLElement): void {
+  const body = h('div', { class: 'pop-body hidden-pop' });
+  const render = () => {
+    const runs = st.hiddenRuns;
+    body.replaceChildren(
+      h('div', { class: 'pop-title' }, `Deleted from TraceML (${runs.length})`),
+      h('div', { class: 'muted pop-note' }, 'These runs are hidden in TraceML. Their folders and files were not touched. Restore a run to show it again.'),
+      runs.length
+        ? h(
+            'div',
+            { class: 'hidden-list' },
+            ...runs.map((r) =>
+              h(
+                'div',
+                { class: 'hidden-item' },
+                h('div', { class: 'hidden-name', title: `${r.id}\n${r.location}\ndeleted ${r.hiddenAt}` }, h('b', {}, r.name), h('span', { class: 'muted small' }, r.location)),
+                button({
+                  label: 'Restore',
+                  variant: 'ghost',
+                  cls: 'btn-small',
+                  onClick: () => {
+                    st.unhideRuns([r.key]);
+                    st.hiddenRuns = st.hiddenRuns.filter((x) => x.key !== r.key);
+                    render();
+                  },
+                }),
+              ),
+            ),
+          )
+        : h('div', { class: 'muted pop-note' }, 'No deleted runs.'),
+      runs.length > 1
+        ? h(
+            'div',
+            { class: 'pop-actions' },
+            button({
+              label: 'Restore all',
+              variant: 'secondary',
+              onClick: () => {
+                st.unhideRuns(st.hiddenRuns.map((r) => r.key));
+                st.hiddenRuns = [];
+                render();
+              },
+            }),
+          )
+        : '',
+    );
+  };
+  render();
+  openPopover(anchor, body, { width: 380, align: 'right', label: 'Deleted runs' });
 }
 
 /** <option>s for a field picker, grouped by column kind. `noneLabel` adds an empty choice. */
@@ -29,6 +85,9 @@ export function fieldOptions(fields: readonly ColumnDef[], current: string | nul
   return out;
 }
 
+/** Choices for the Max rows control (null = all rows). */
+export const MAX_ROW_OPTIONS: (number | null)[] = [25, 50, 100, 250, 500, 1000, null];
+
 const SEGMENT: DisplayStatus[] = ['running', 'stale', 'completed', 'failed', 'killed', 'unknown'];
 
 export class Toolbar {
@@ -42,6 +101,9 @@ export class Toolbar {
   private readonly differingHost = h('span', {});
   private readonly counts = h('span', { class: 'toolbar-counts' });
   private readonly chips = h('div', { class: 'filter-chips', 'aria-label': 'Active filters' });
+  private readonly maxRows: HTMLInputElement;
+  private readonly firstHost = h('span', {});
+  private readonly exportBtn: HTMLButtonElement;
   private searchTimer: ReturnType<typeof setTimeout> | undefined;
   private segKey = '';
   private chipsKey = '';
@@ -66,6 +128,49 @@ export class Toolbar {
     this.groupBtn = button({ label: 'Group', icon: 'group', title: 'Group runs by a field', onClick: () => this.openGroup() });
     this.columnsBtn = button({ label: 'Columns', icon: 'columns', title: 'Choose visible columns', onClick: () => this.openColumns() });
     const moreBtn: HTMLButtonElement = button({ icon: 'more', title: 'More actions', onClick: () => this.openMore(moreBtn) });
+    this.exportBtn = button({
+      label: 'Export',
+      icon: 'file',
+      title: 'Save the rows shown in the table (filters, sort, column order and Max rows applied) as a CSV file an agent or pandas can read',
+      onClick: () => st.exportTable(),
+    });
+    // Max rows: pick a preset or type any whole number up to MAX_ROWS_LIMIT ("All" = no limit).
+    const maxRowsHelp = `Maximum number of rows shown in the table (applied after filters and sorting). Type any number from 1 to ${MAX_ROWS_LIMIT}, or All.`;
+    this.maxRows = h('input', {
+      type: 'text',
+      class: 'max-rows-input',
+      inputmode: 'numeric',
+      list: 'traceml-max-rows',
+      'aria-label': 'Max rows',
+      title: maxRowsHelp,
+      spellcheck: 'false',
+      value: st.s.maxRows === null ? 'All' : String(st.s.maxRows),
+    });
+    const maxRowsList = h('datalist', { id: 'traceml-max-rows' }, ...MAX_ROW_OPTIONS.map((n) => h('option', { value: n === null ? 'All' : String(n) })));
+    let maxRowsTimer: ReturnType<typeof setTimeout> | undefined;
+    const applyMaxRows = (commit: boolean) => {
+      const v = parseMaxRows(this.maxRows.value);
+      this.maxRows.classList.toggle('invalid', v === undefined);
+      this.maxRows.title = v === undefined ? `Enter a whole number from 1 to ${MAX_ROWS_LIMIT}, or All` : maxRowsHelp;
+      if (v === undefined) {
+        if (commit) this.maxRows.value = st.s.maxRows === null ? 'All' : String(st.s.maxRows);
+        if (commit) this.maxRows.classList.remove('invalid');
+        return;
+      }
+      if (commit) this.maxRows.value = v === null ? 'All' : String(v);
+      if (v === st.s.maxRows) return;
+      st.s.maxRows = v;
+      st.changed('table', 'toolbar');
+    };
+    this.maxRows.addEventListener('input', () => {
+      clearTimeout(maxRowsTimer);
+      maxRowsTimer = setTimeout(() => applyMaxRows(false), 250);
+    });
+    this.maxRows.addEventListener('change', () => applyMaxRows(true));
+    this.maxRows.addEventListener('focus', () => this.maxRows.select());
+    this.maxRows.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') applyMaxRows(true);
+    });
     for (const b of [this.filterBtn, this.groupBtn, this.columnsBtn, moreBtn]) b.setAttribute('aria-haspopup', 'true');
 
     const primary = h(
@@ -73,17 +178,19 @@ export class Toolbar {
       { class: 'toolbar-row' },
       h('div', { class: 'search' }, icon('search', 15), this.search, this.searchClear),
       h('div', { class: 'spacer' }),
-      h('div', { class: 'btn-group' }, this.filterBtn, this.groupBtn, this.columnsBtn, moreBtn),
+      h('div', { class: 'btn-group' }, this.filterBtn, this.groupBtn, this.columnsBtn, this.exportBtn, moreBtn),
     );
     const secondary = h(
       'div',
       { class: 'toolbar-row' },
       this.segment,
       this.differingHost,
+      this.firstHost,
       h(
         'div',
         { class: 'toolbar-right' },
         this.counts,
+        h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Max rows'), this.maxRows, maxRowsList),
         button({ label: 'Select filtered', icon: 'check', variant: 'ghost', cls: 'btn-small', title: 'Add all runs matching the filters to the selection', onClick: () => st.setSelected([...selectFiltered(new Set(st.s.selected), st.sortedRuns())]) }),
       ),
     );
@@ -98,6 +205,7 @@ export class Toolbar {
   }
 
   render(areas: Set<Area>): void {
+    this.exportBtn.classList.toggle('busy', this.st.exporting);
     if (!(areas.has('runs') || areas.has('table') || areas.has('toolbar') || areas.has('selection'))) return;
     if (document.activeElement !== this.search && this.search.value !== this.st.s.filters.search) this.search.value = this.st.s.filters.search;
     this.searchClear.hidden = !this.search.value;
@@ -110,16 +218,29 @@ export class Toolbar {
         }, 'Show only parameter columns whose values differ between the filtered runs'),
       );
     }
+    if (!this.firstHost.firstChild || (this.firstHost.querySelector('input') as HTMLInputElement).checked !== this.st.s.showFirst) {
+      this.firstHost.replaceChildren(
+        toggle('Starting values', this.st.s.showFirst, (v) => this.st.setShowFirst(v), 'Also show each metric\'s starting value (its first logged value in metrics.jsonl) in the table, charts and comparison'),
+      );
+    }
+    if (document.activeElement !== this.maxRows) {
+      const shown = this.st.s.maxRows === null ? 'All' : String(this.st.s.maxRows);
+      if (this.maxRows.value !== shown) this.maxRows.value = shown;
+    }
     const total = this.st.allRuns().length;
-    const shown = this.st.filteredRuns().length;
+    const filtered = this.st.filteredRuns().length;
+    const displayed = this.st.displayedRuns().length;
     const sel = this.st.selectedRuns().length;
     this.counts.replaceChildren(
-      h('b', {}, String(shown)),
-      shown === total ? ' runs' : ` of ${total} runs`,
+      ...(displayed < filtered ? ['showing ', h('b', {}, String(displayed)), ' of '] : []),
+      h('b', {}, String(filtered)),
+      filtered === total ? ' runs' : ` filtered of ${total}`,
       h('span', { class: 'muted' }, '  ·  '),
       h('b', {}, String(sel)),
       ' selected',
     );
+    this.counts.title = displayed < filtered ? `The table shows the first ${displayed} rows (Max rows). Increase Max rows to see more.` : '';
+    this.exportBtn.disabled = displayed === 0;
     const colConds = Object.entries(this.st.s.filters.columns).filter(([k, v]) => v.trim() && k !== 'location').length;
     this.setBadge(this.filterBtn, colConds);
     this.groupBtn.classList.toggle('active', !!this.st.s.groupBy);
@@ -366,7 +487,7 @@ export class Toolbar {
                 ...cols.map((c) => {
                   const cb = h('input', { type: 'checkbox', checked: visible.has(c.id) });
                   cb.addEventListener('change', () => this.setColumnVisible(c.id, cb.checked));
-                  return h('label', { class: 'check', title: c.label }, cb, h('span', {}, c.kind === 'last' || c.kind === 'best' ? c.key : c.label));
+                  return h('label', { class: 'check', title: c.label }, cb, h('span', {}, c.kind === 'first' || c.kind === 'last' || c.kind === 'best' ? c.key : c.label));
                 }),
               ),
             ),
@@ -386,6 +507,13 @@ export class Toolbar {
       menu([
         { label: 'Select filtered runs', icon: 'check', onSelect: () => st.setSelected([...selectFiltered(new Set(st.s.selected), st.sortedRuns())]) },
         { label: 'Clear selection', icon: 'close', disabled: st.s.selected.length === 0, onSelect: () => st.setSelected([]) },
+        {
+          label: st.s.selected.length ? `Delete ${st.s.selected.length} selected from TraceML` : 'Delete selected from TraceML',
+          icon: 'trash',
+          disabled: st.s.selected.length === 0,
+          onSelect: () => st.hideRuns([...st.s.selected]),
+        },
+        { label: `Deleted runs (${st.hiddenRuns.length})…`, icon: 'refresh', disabled: st.hiddenRuns.length === 0, onSelect: () => openHiddenRuns(st, anchor) },
         'separator',
         { label: 'Clear filters', icon: 'filter', disabled: st.activeFilterCount() === 0, onSelect: () => st.clearFilters() },
         {

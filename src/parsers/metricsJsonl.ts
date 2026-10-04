@@ -112,6 +112,16 @@ export class MetricsHistory {
   metricNames(): string[] {
     return [...this.metrics.keys()];
   }
+
+  /** First non-null value of each metric (its starting value); metrics that are always null are omitted. */
+  firstValues(): Record<string, number | null> {
+    const out: Record<string, number | null> = {};
+    for (const [k, col] of this.metrics) {
+      const v = col.values.find((x) => x !== null);
+      if (v !== undefined) out[k] = v;
+    }
+    return out;
+  }
 }
 
 export interface TailPollResult {
@@ -204,26 +214,42 @@ export class JsonlTail {
   }
 }
 
+export const PEEK_BYTES = 64 * 1024;
+
+export interface JsonlHead {
+  names: string[];
+  /** First non-null value of each metric seen in the head. */
+  first: Record<string, number | null>;
+  /** Bytes looked at; when below PEEK_BYTES the whole file was read. */
+  bytes: number;
+}
+
 /**
- * Cheaply discovers metric names from the head of a metrics.jsonl (used only for runs without
- * metrics.json, so the table/picker know about their metrics without loading the full history).
+ * Cheaply reads the head of a metrics.jsonl: metric names (for runs without metrics.json) and the
+ * starting value of each metric, without loading the full history.
  */
-export async function peekJsonlMetricNames(filePath: string, maxBytes = 64 * 1024): Promise<string[]> {
+export async function peekJsonlHead(filePath: string, maxBytes = PEEK_BYTES): Promise<JsonlHead> {
+  const none: JsonlHead = { names: [], first: {}, bytes: 0 };
   let fh;
   try {
     fh = await fs.open(filePath, 'r');
   } catch {
-    return [];
+    return none;
   }
   try {
     const buf = Buffer.alloc(maxBytes);
     const { bytesRead } = await fh.read(buf, 0, maxBytes, 0);
     const h = new MetricsHistory();
     h.ingest(buf.subarray(0, bytesRead));
-    return h.metricNames();
+    return { names: h.metricNames(), first: h.firstValues(), bytes: bytesRead };
   } catch {
-    return [];
+    return none;
   } finally {
     await fh.close();
   }
+}
+
+/** Metric names from the head of a metrics.jsonl. */
+export async function peekJsonlMetricNames(filePath: string, maxBytes = PEEK_BYTES): Promise<string[]> {
+  return (await peekJsonlHead(filePath, maxBytes)).names;
 }

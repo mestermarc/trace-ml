@@ -15,7 +15,7 @@ export class ComparisonView {
   render(): void {
     if (this.st.s.view !== 'compare') return;
     const runs = this.st.selectedRuns();
-    const key = JSON.stringify([runs, this.st.s.compareDiffOnly, this.st.s.focused]);
+    const key = JSON.stringify([runs, this.st.s.compareDiffOnly, this.st.s.focused, this.st.s.showFirst]);
     if (key === this.key) return;
     this.key = key;
     const scrollTop = this.el.parentElement?.scrollTop ?? 0;
@@ -31,12 +31,12 @@ export class ComparisonView {
         emptyState({
           icon: 'compare',
           title: runs.length ? 'Select one more run' : 'Select experiments to compare',
-          text: 'Tick two or more runs in the Runs table. Their parameters and metrics are shown side by side here, using the same colours as the charts.',
+          text: 'Tick two or more runs in the Runs table. Their config, run metrics and summary values are shown side by side here, using the same colours as the charts.',
           action: { label: 'Go to runs', icon: 'runs', onClick: () => this.st.navigate('runs') },
         }),
       );
     const shown = runs.slice(0, MAX_PLOT_RUNS);
-    const { params, metrics } = buildComparison(shown);
+    const { params, metrics } = buildComparison(shown, this.st.s.showFirst);
     const colors = palette();
     const diffOnly = this.st.s.compareDiffOnly;
     const nDiffParams = params.filter((r) => r.differs).length;
@@ -99,7 +99,7 @@ export class ComparisonView {
       return h('div', { class: 'cmp-scroll' }, h('table', { class: 'cmp' }, h('thead', {}, headRow()), h('tbody', {}, ...body)));
     };
 
-    const sectionName = (row: ComparisonRow) => ({ best: 'Best', summary: 'Summary', last: 'Last' })[row.label.split(' ')[0] as 'best'] ?? '';
+    const sectionName = (row: ComparisonRow) => ({ first: 'Run · start value', last: 'Run · last value', best: 'Run · best value', summary: 'Summary' })[row.label.split(' ')[0] as 'best'] ?? '';
 
     return h(
       'div',
@@ -117,8 +117,8 @@ export class ComparisonView {
       ),
       runs.length > shown.length ? h('div', { class: 'muted small' }, `Showing the first ${shown.length} of ${runs.length} selected runs.`) : '',
       strip,
-      h('section', { class: 'panel' }, h('header', { class: 'panel-head' }, h('h2', {}, 'Parameters'), h('span', { class: 'muted small' }, `${nDiffParams} of ${params.length} differ`)), table(params)),
-      h('section', { class: 'panel' }, h('header', { class: 'panel-head' }, h('h2', {}, 'Metrics'), h('span', { class: 'muted small' }, `${nDiffMetrics} of ${metrics.length} differ`)), table(metrics, sectionName)),
+      h('section', { class: 'panel' }, h('header', { class: 'panel-head' }, h('h2', {}, 'Config'), h('span', { class: 'muted small' }, `${nDiffParams} of ${params.length} differ`)), table(params)),
+      h('section', { class: 'panel' }, h('header', { class: 'panel-head' }, h('h2', {}, 'Run & summary'), h('span', { class: 'muted small' }, `${nDiffMetrics} of ${metrics.length} differ`)), table(metrics, sectionName)),
     );
   }
 }

@@ -40,6 +40,8 @@ export interface SummaryInput {
   extraMetricNames: string[];
   /** Last step seen in a loaded metrics.jsonl (used when metrics.json is missing). */
   historyStep: number | null;
+  /** First non-null value of each metric in metrics.jsonl. */
+  first: Record<string, number | null>;
   warnings: string[];
 }
 
@@ -72,6 +74,7 @@ export function buildRunSummary(input: SummaryInput, nowMs: number, staleAfterSe
     last: metrics?.last ?? {},
     best: metrics?.best ?? {},
     summary: metrics?.summary ?? {},
+    first: input.first,
     metricNames: [...names].sort(),
     warnings: input.warnings,
     legacy: !input.hasRunJson,
@@ -83,7 +86,18 @@ export function buildRunSummary(input: SummaryInput, nowMs: number, staleAfterSe
 // Columns
 // ---------------------------------------------------------------------------
 
-export type ColumnKind = 'fixed' | 'param' | 'last' | 'best' | 'summary';
+/**
+ * Column kinds. Logged values come in three groups: config (`param`, from params.yaml), run (the
+ * metric history: `first` = starting value, `last`, `best`) and summary (final values).
+ */
+export type ColumnKind = 'fixed' | 'param' | 'first' | 'last' | 'best' | 'summary';
+
+/** The three groups of logged values shown in the UI and the export. */
+export type ValueGroup = 'config' | 'run' | 'summary';
+
+export function valueGroup(kind: ColumnKind): ValueGroup | null {
+  return kind === 'param' ? 'config' : kind === 'summary' ? 'summary' : kind === 'fixed' ? null : 'run';
+}
 
 export interface ColumnDef {
   id: string;
@@ -120,7 +134,7 @@ export function parseColumnId(id: string): { kind: ColumnKind; key: string } {
   const i = id.indexOf(':');
   if (i > 0) {
     const kind = id.slice(0, i);
-    if (kind === 'param' || kind === 'last' || kind === 'best' || kind === 'summary') return { kind, key: id.slice(i + 1) };
+    if (kind === 'param' || kind === 'first' || kind === 'last' || kind === 'best' || kind === 'summary') return { kind, key: id.slice(i + 1) };
   }
   return { kind: 'fixed', key: id };
 }
@@ -130,6 +144,8 @@ export function columnValue(run: RunSummary, colId: string): Scalar {
   switch (kind) {
     case 'param':
       return run.params[key] ?? null;
+    case 'first':
+      return run.first[key] ?? null;
     case 'last':
       return run.last[key] ?? null;
     case 'best':
@@ -171,11 +187,13 @@ export function columnValue(run: RunSummary, colId: string): Scalar {
 /** All dynamic columns present in the given runs, grouped by kind, keys sorted. */
 export function dynamicColumns(runs: readonly RunSummary[]): ColumnDef[] {
   const params = new Map<string, boolean>();
+  const first = new Set<string>();
   const last = new Set<string>();
   const best = new Set<string>();
   const summary = new Map<string, boolean>();
   for (const r of runs) {
     for (const [k, v] of Object.entries(r.params)) params.set(k, (params.get(k) ?? true) && (v === null || typeof v === 'number'));
+    for (const k of Object.keys(r.first)) first.add(k);
     for (const k of Object.keys(r.last)) last.add(k);
     for (const k of Object.keys(r.best)) best.add(k);
     for (const [k, v] of Object.entries(r.summary)) summary.set(k, (summary.get(k) ?? true) && (v === null || typeof v === 'number'));
@@ -183,6 +201,7 @@ export function dynamicColumns(runs: readonly RunSummary[]): ColumnDef[] {
   const cols: ColumnDef[] = [];
   const sorted = <T>(it: Iterable<T>) => [...it].sort();
   for (const [k, num] of sorted(params.entries())) cols.push({ id: columnId('param', k), kind: 'param', key: k, label: k, numeric: num });
+  for (const k of sorted(first)) cols.push({ id: columnId('first', k), kind: 'first', key: k, label: `start ${k}`, numeric: true });
   for (const k of sorted(last)) cols.push({ id: columnId('last', k), kind: 'last', key: k, label: `last ${k}`, numeric: true });
   for (const k of sorted(best)) cols.push({ id: columnId('best', k), kind: 'best', key: k, label: `best ${k}`, numeric: true });
   for (const [k, num] of sorted(summary.entries())) cols.push({ id: columnId('summary', k), kind: 'summary', key: k, label: k, numeric: num });
@@ -267,21 +286,25 @@ export function valuesDiffer(values: readonly (Scalar | undefined)[]): boolean {
   return values.some((v) => valueKey(v) !== first);
 }
 
-/** Side-by-side tables for the selected runs. Presents data only; no ranking or winner. */
-export function buildComparison(runs: readonly RunSummary[]): { params: ComparisonRow[]; metrics: ComparisonRow[] } {
+/**
+ * Side-by-side tables for the selected runs. Presents data only; no ranking or winner.
+ * `includeFirst` adds the starting value of each metric (row label `first <metric>`).
+ */
+export function buildComparison(runs: readonly RunSummary[], includeFirst = false): { params: ComparisonRow[]; metrics: ComparisonRow[] } {
   const paramKeys = [...new Set(runs.flatMap((r) => Object.keys(r.params)))].sort();
   const params = paramKeys.map((k) => {
     const raw = runs.map((r) => (k in r.params ? r.params[k] : undefined));
     return { label: k, values: raw.map((v) => (v === undefined ? null : v)), differs: valuesDiffer(raw) };
   });
   const metrics: ComparisonRow[] = [];
-  const section = (kind: 'last' | 'best' | 'summary') => {
+  const section = (kind: 'first' | 'last' | 'best' | 'summary') => {
     const keys = [...new Set(runs.flatMap((r) => Object.keys(r[kind])))].sort();
     for (const k of keys) {
       const values = runs.map((r) => columnValue(r, columnId(kind, k)));
       metrics.push({ label: `${kind} ${k}`, values, differs: valuesDiffer(values) });
     }
   };
+  if (includeFirst) section('first');
   section('last');
   section('best');
   section('summary');

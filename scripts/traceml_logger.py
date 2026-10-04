@@ -11,6 +11,12 @@ Copy this file into a training project (or use it as the specification for your 
             run.log(epoch, {"val/loss": val_loss, "val/auc": val_auc})
         run.summary["test/auc"] = test_auc
 
+TraceML shows three kinds of logged values:
+
+    config   `params=` (flat hyper-parameters -> params.yaml; optional full nested `config=` -> config.json)
+    run      `run.log(step, {...})` once or twice per epoch -> metrics.jsonl (+ last/best in metrics.json)
+    summary  `run.summary[key] = value` for final values, e.g. test metrics -> metrics.json "summary"
+
 Leaving the `with` block normally marks the run `completed`; an exception marks it `failed`
 (with error type, message and traceback); Ctrl+C marks it `killed`.
 """

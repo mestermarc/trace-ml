@@ -34,6 +34,7 @@ export function makeRun(over: Partial<RunSummary> & { key: string }): RunSummary
     last: {},
     best: {},
     summary: {},
+    first: {},
     metricNames: [],
     warnings: [],
     legacy: false,

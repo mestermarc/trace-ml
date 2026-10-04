@@ -147,6 +147,32 @@ export function defaultVisibleColumns(runs: readonly RunSummary[]): string[] {
   ];
 }
 
+/** The Max rows limit, applied to already filtered and sorted runs; null = no limit. */
+export function limitRows<T>(rows: readonly T[], max: number | null): T[] {
+  return max === null || max >= rows.length ? rows.slice() : rows.slice(0, Math.max(0, max));
+}
+
+/** Upper bound of the Max rows input (larger tables: choose All). */
+export const MAX_ROWS_LIMIT = 1000;
+
+/** Max rows input text -> limit: a whole number 1..MAX_ROWS_LIMIT, or null for "All". undefined = invalid. */
+export function parseMaxRows(text: string): number | null | undefined {
+  const t = text.trim().toLowerCase();
+  if (t === '' || t === 'all') return null;
+  if (!/^\d+$/.test(t)) return undefined;
+  const n = Number(t);
+  return n >= 1 && n <= MAX_ROWS_LIMIT ? n : undefined;
+}
+
+/** Moves column `id` before (or after) column `target` in an ordered id list. */
+export function moveColumn(ids: readonly string[], id: string, target: string, after = false): string[] {
+  if (id === target || !ids.includes(id) || !ids.includes(target)) return ids.slice();
+  const out = ids.filter((x) => x !== id);
+  const i = out.indexOf(target);
+  out.splice(after ? i + 1 : i, 0, id);
+  return out;
+}
+
 /** "Select filtered": union of the current selection and the filtered runs. */
 export function selectFiltered(selected: ReadonlySet<string>, filtered: readonly RunSummary[]): Set<string> {
   const out = new Set(selected);

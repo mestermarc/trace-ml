@@ -33,6 +33,15 @@ function cellText(run: RunSummary, c: ColumnDef): string {
 
 const TIME_KEYS = new Set(['started', 'ended', 'heartbeat', 'duration']);
 
+/** Header badge per column kind, and where the value comes from (config / run / summary). */
+const KIND_BADGE: Record<Exclude<ColumnDef['kind'], 'fixed'>, { text: string; title: string }> = {
+  param: { text: 'cfg', title: 'Config (params.yaml)' },
+  first: { text: 'start', title: 'Run: starting value (first logged value in metrics.jsonl)' },
+  last: { text: 'last', title: 'Run: last logged value (metrics.json)' },
+  best: { text: 'best', title: 'Run: best value (metrics.json)' },
+  summary: { text: 'sum', title: 'Summary: final value (metrics.json summary)' },
+};
+
 export class RunTable {
   readonly el: HTMLElement;
   private readonly scroll: HTMLDivElement;
@@ -48,6 +57,9 @@ export class RunTable {
   /** Rendered row elements keyed by run key / group label, with the HTML they were built from. */
   private rows = new Map<string, { el: HTMLDivElement; html: string }>();
   private emptyKey = '';
+  /** Column being dragged in the header, and the column whose header should get focus after a move. */
+  private dragCol: string | null = null;
+  private refocusCol: string | null = null;
 
   constructor(private readonly st: AppState) {
     this.head = h('div', { class: 'thead', role: 'rowgroup' });
@@ -94,7 +106,7 @@ export class RunTable {
 
     const selectAll = h('input', { type: 'checkbox', class: 'cb', title: 'Select / clear all filtered runs', 'aria-label': 'Select all filtered runs' });
     selectAll.addEventListener('change', () => {
-      const filtered = this.st.sortedRuns().map((r) => r.key);
+      const filtered = this.st.displayedRuns().map((r) => r.key);
       if (selectAll.checked) this.st.setSelected([...this.st.s.selected, ...filtered]);
       else {
         const f = new Set(filtered);
@@ -110,14 +122,17 @@ export class RunTable {
     for (const c of this.cols) {
       const sortIdx = this.st.s.sort.findIndex((k) => k.col === c.id);
       const sortKey = this.st.s.sort[sortIdx];
+      const badge = c.kind === 'fixed' ? null : KIND_BADGE[c.kind];
       const th = h('button', {
         type: 'button',
         class: `th${c.numeric ? ' num' : ''}${sortKey ? ' sorted' : ''}`,
-        title: `${c.label}\nClick to sort · Shift+click to add a sort key`,
+        title: `${c.label}${badge ? ` · ${badge.title}` : ''}\nClick to sort · Shift+click to add a sort key\nDrag (or Alt+←/→) to move the column`,
         role: 'columnheader',
+        draggable: 'true',
         'aria-sort': sortKey ? (sortKey.dir === 'asc' ? 'ascending' : 'descending') : 'none',
       });
-      if (c.kind !== 'fixed') th.append(h('span', { class: `kind kind-${c.kind}` }, c.kind === 'summary' ? 'sum' : c.kind));
+      th.dataset.col = c.id;
+      if (badge) th.append(h('span', { class: `kind kind-${c.kind}` }, badge.text));
       th.append(h('span', { class: 'label' }, c.kind === 'fixed' ? c.label : c.key));
       const sortEl = h('span', { class: 'sort', 'aria-hidden': 'true' });
       if (sortKey) sortEl.innerHTML = iconHtml(sortKey.dir === 'asc' ? 'arrowUp' : 'arrowDown', 12) + (this.st.s.sort.length > 1 ? `<sub>${sortIdx + 1}</sub>` : '');
@@ -126,6 +141,7 @@ export class RunTable {
         this.st.s.sort = toggleSort(this.st.s.sort, c.id, (e as MouseEvent).shiftKey);
         this.st.changed('table');
       });
+      this.wireColumnMove(th, c.id);
       headRow.append(th);
 
       const input = h('input', {
@@ -150,6 +166,10 @@ export class RunTable {
       filterRow.append(h('div', { class: 'th' }, input));
     }
     this.head.replaceChildren(headRow, ...(this.st.s.showFilterRow ? [filterRow] : []));
+    if (this.refocusCol) {
+      this.head.querySelector<HTMLElement>(`.th-row [data-col="${CSS.escape(this.refocusCol)}"]`)?.focus();
+      this.refocusCol = null;
+    }
 
     if (focusedCol) {
       const inp = this.head.querySelector<HTMLInputElement>(`input[data-filter-col="${CSS.escape(focusedCol)}"]`);
@@ -160,10 +180,57 @@ export class RunTable {
     }
   }
 
+  /** Column reordering: drag a header onto another one, or Alt+Left / Alt+Right on a focused header. */
+  private wireColumnMove(th: HTMLElement, id: string): void {
+    const side = (e: DragEvent) => {
+      const r = th.getBoundingClientRect();
+      return e.clientX > r.left + r.width / 2;
+    };
+    const unmark = () => this.head.querySelectorAll('.drop-before, .drop-after').forEach((el) => el.classList.remove('drop-before', 'drop-after'));
+    th.addEventListener('dragstart', (e) => {
+      this.dragCol = id;
+      th.classList.add('dragging');
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', id);
+      }
+    });
+    th.addEventListener('dragend', () => {
+      this.dragCol = null;
+      th.classList.remove('dragging');
+      unmark();
+    });
+    th.addEventListener('dragover', (e) => {
+      if (!this.dragCol || this.dragCol === id) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      const after = side(e);
+      th.classList.toggle('drop-after', after);
+      th.classList.toggle('drop-before', !after);
+    });
+    th.addEventListener('dragleave', () => th.classList.remove('drop-before', 'drop-after'));
+    th.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const from = this.dragCol;
+      unmark();
+      if (from && from !== id) this.st.moveVisibleColumn(from, id, side(e));
+    });
+    th.addEventListener('keydown', (e) => {
+      if (!e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+      e.preventDefault();
+      const i = this.cols.findIndex((c) => c.id === id);
+      const right = e.key === 'ArrowRight';
+      const other = this.cols[right ? i + 1 : i - 1];
+      if (!other) return;
+      this.refocusCol = id;
+      this.st.moveVisibleColumn(id, other.id, right);
+    });
+  }
+
   private updateHeadState(): void {
     const all = this.head.querySelector<HTMLInputElement>('.th-row input[type=checkbox]');
     if (all) {
-      const filtered = this.st.sortedRuns();
+      const filtered = this.st.displayedRuns();
       const sel = new Set(this.st.s.selected);
       const n = filtered.filter((r) => sel.has(r.key)).length;
       all.checked = n > 0 && n === filtered.length;

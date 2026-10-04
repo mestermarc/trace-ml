@@ -38,6 +38,7 @@ async function main(): Promise<void> {
   const html = `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><title>TraceML preview</title>
 <link rel="stylesheet" href="${dist}/webview.css">
+<meta name="traceml-logo" content="${dist}/../media/curly_m.svg">
 <style>
   /* Approximation of VS Code Dark+ theme variables */
   body { --vscode-font-family: -apple-system, 'Segoe UI', sans-serif; --vscode-font-size: 13px; --vscode-foreground: #cccccc;
@@ -93,6 +94,28 @@ window.acquireVsCodeApi = () => ({
       }
       case 'requestDetail': if (DATA.details[msg.runKey]) send({ type: 'runDetail', detail: DATA.details[msg.runKey] }); break;
       case 'openFile': send({ type: 'error', message: 'openFile(' + msg.file + ') — only available inside VS Code' }); break;
+      case 'exportTable': send({ type: 'exported', path: '/home/me/proj/traceml/.cache/exports/table-20261001-120000.csv', latestPath: '/home/me/proj/traceml/.cache/exports/latest.csv', rows: msg.request.runKeys.length, exportedAt: new Date().toISOString() }); break;
+      case 'hideRuns': {
+        window.__hidden = window.__hidden || new Map();
+        for (const k of msg.runKeys) { const r = DATA.runs.find((x) => x.key === k); if (r) window.__hidden.set(k, { key: k, id: r.id, name: r.name, location: r.location, hiddenAt: new Date().toISOString() }); }
+        send({ type: 'hiddenRuns', runs: [...window.__hidden.values()] });
+        break;
+      }
+      case 'unhideRuns': {
+        window.__hidden = window.__hidden || new Map();
+        for (const k of msg.runKeys) window.__hidden.delete(k);
+        send({ type: 'hiddenRuns', runs: [...window.__hidden.values()] });
+        send({ type: 'runsPatch', upserts: DATA.runs.filter((r) => msg.runKeys.includes(r.key)), removed: [], refreshedAt: Date.now() });
+        break;
+      }
+      case 'savePlot': {
+        // Preview only: keep the PNG so it can be inspected (window.__lastPng), report its pixel size.
+        window.__lastPng = msg.data;
+        const img = new Image();
+        img.onload = () => send({ type: 'plotSaved', path: '/home/me/proj/traceml/.cache/plots/plot-' + msg.title.toLowerCase().replace(/[^a-z0-9_-]+/g, '-') + '.png', width: img.naturalWidth, height: img.naturalHeight });
+        img.src = 'data:image/png;base64,' + msg.data;
+        break;
+      }
     }
   }, 20),
 });
