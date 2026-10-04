@@ -1,5 +1,10 @@
 // Bundles the extension host (Node/CJS) and the webview (browser/IIFE + CSS) into dist/.
+import { copyFileSync, mkdirSync } from 'node:fs';
 import * as esbuild from 'esbuild';
+
+// sql.js loads its WebAssembly from dist/ at runtime (passed as bytes; nothing is fetched).
+mkdirSync('dist', { recursive: true });
+copyFileSync('node_modules/sql.js/dist/sql-wasm.wasm', 'dist/sql-wasm.wasm');
 
 const production = process.argv.includes('--production');
 const watch = process.argv.includes('--watch');

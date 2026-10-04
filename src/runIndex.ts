@@ -162,6 +162,16 @@ function indexedRun(v: unknown): IndexedRun {
   };
 }
 
+/** Validates one indexed run (e.g. a row of the run database); null when malformed. */
+export function parseIndexedRun(v: unknown): IndexedRun | null {
+  try {
+    return indexedRun(v);
+  } catch (e) {
+    if (e instanceof Invalid) return null;
+    throw e;
+  }
+}
+
 /**
  * Parses an index file. Returns only the valid entries; a missing, corrupt or older-version index
  * gives an empty list (the runs are then simply parsed from disk).

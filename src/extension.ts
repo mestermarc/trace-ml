@@ -1,12 +1,15 @@
+import initSqlJs from 'sql.js';
 import * as vscode from 'vscode';
 import { listRuns, resolveRunsRoots, type DiscoveredRun, type RunsRoot } from './discovery';
 import { DEFAULT_CACHE_DIR, resolveCacheDirPath } from './cacheDir';
 import { CacheStore } from './cacheStore';
 import { parseHiddenRuns, serializeHiddenRuns, type HiddenRun } from './model/hiddenRuns';
 import { MAX_PNG_BYTES, isPng, pngSize, setPngDpi } from './model/png';
+import { lineCsv } from './model/plotData';
 import { buildTableExport, exportFileName, plotFileName, serializeTableCsv } from './model/tableExport';
 import { READONLY_SCHEME, ReadonlyRunFiles } from './readonlyFs';
 import { joinPath, relativePath } from './paths';
+import { RunDb } from './runDb';
 import { parseRunIndex, serializeRunIndex } from './runIndex';
 import { Poller } from './poller';
 import { parseWebviewMessage, type ExportRequest, type HostToWebview, type WebviewToHost } from './protocol';
@@ -75,12 +78,18 @@ class TraceMLController implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
   private readonly readonlyFiles = new ReadonlyRunFiles();
   private lastExport: { file: string; latest: string } | null = null;
-  private lastPlot: string | null = null;
+  private lastPlot: { path: string; csv: boolean } | null = null;
   /** Runs deleted from TraceML (hidden; never discovered or read again until restored). */
   private hidden = new Map<string, HiddenRun>();
   /** The run index and the hidden-runs list are read once, on the first scan. */
   private cacheLoaded = false;
   private indexTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The run database (runs.sqlite); null when sql.js could not be loaded (then runs-index.json is used). */
+  private db: RunDb | null = null;
+  /** Runs changed / removed since the database was last written; `dbAll` = write every run. */
+  private dbDirty = new Set<string>();
+  private dbRemoved = new Set<string>();
+  private dbAll = false;
 
   constructor(private readonly ctx: vscode.ExtensionContext) {
     this.store = new RunStore({
@@ -230,21 +239,69 @@ class TraceMLController implements vscode.Disposable {
     this.cacheLoaded = true;
     const cache = this.cache();
     this.hidden = new Map(parseHiddenRuns(await cache.readHiddenRuns()).map((r) => [r.key, r]));
-    const indexed = parseRunIndex((await cache.readRunsIndex()) ?? '').filter((r) => !this.hidden.has(r.key) && this.roots.some((root) => isRunOf(root.dir, r.key)));
+    let saved = await this.openDb(cache);
+    if (!saved) {
+      // No database yet (first start, or after an upgrade from <= 0.1.17): use the JSON index
+      // once; the database is then written with every run.
+      saved = parseRunIndex((await cache.readRunsIndex()) ?? '');
+      this.dbAll = true;
+    }
+    const indexed = saved.filter((r) => !this.hidden.has(r.key) && this.roots.some((root) => isRunOf(root.dir, r.key)));
     this.store.seed(indexed);
-    if (indexed.length) this.output.appendLine(`Loaded ${indexed.length} runs from the run index`);
+    if (indexed.length) this.output.appendLine(`Loaded ${indexed.length} runs from ${this.db ? 'the run database' : 'the run index'}`);
     this.sendSnapshot();
   }
 
-  /** Saves the run index soon (debounced: at most once per INDEX_SAVE_DELAY_MS). */
-  private scheduleIndexSave(): void {
+  /**
+   * Loads sql.js (WebAssembly bundled in dist/) and opens `<cache>/runs.sqlite`. Returns the saved
+   * runs, or null when the database is new (or sql.js is unavailable, then this.db stays null).
+   */
+  private async openDb(cache: CacheStore): Promise<ReturnType<RunDb['load']> | null> {
+    try {
+      const wasm = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(this.ctx.extensionUri, 'dist', 'sql-wasm.wasm'));
+      const SQL = await initSqlJs({ wasmBinary: wasm.buffer.slice(wasm.byteOffset, wasm.byteOffset + wasm.byteLength) as ArrayBuffer });
+      const { db, fresh } = RunDb.open(SQL, await cache.readRunsDb());
+      this.db = db;
+      return fresh ? null : db.load();
+    } catch (e) {
+      this.db = null;
+      this.output.appendLine(`Run database unavailable, using runs-index.json instead: ${e instanceof Error ? e.message : String(e)}`);
+      return null;
+    }
+  }
+
+  /** Saves the run database (or index) soon: at most once per INDEX_SAVE_DELAY_MS. */
+  private scheduleIndexSave(changed: readonly string[] = [], removed: readonly string[] = []): void {
+    for (const k of changed) this.dbDirty.add(k);
+    for (const k of removed) {
+      this.dbDirty.delete(k);
+      this.dbRemoved.add(k);
+    }
     if (this.indexTimer) return;
     this.indexTimer = setTimeout(() => {
       this.indexTimer = undefined;
-      void this.cache()
-        .writeRunsIndex(serializeRunIndex(this.store.exportIndex()))
-        .catch((e) => this.output.appendLine(`Could not save the run index: ${e instanceof Error ? e.message : String(e)}`));
+      void this.saveIndex().catch((e) => this.output.appendLine(`Could not save the run database: ${e instanceof Error ? e.message : String(e)}`));
     }, INDEX_SAVE_DELAY_MS);
+  }
+
+  private async saveIndex(): Promise<void> {
+    const cache = this.cache();
+    if (!this.db) {
+      await cache.writeRunsIndex(serializeRunIndex(this.store.exportIndex()));
+      return;
+    }
+    const summaries = new Map(this.store.summaries().map((r) => [r.key, r]));
+    const rows = this.store.exportIndex().flatMap((state) => {
+      const summary = summaries.get(state.key);
+      if (!summary || !(this.dbAll || this.dbDirty.has(state.key))) return [];
+      return [{ state, summary, path: this.store.dirOf(state.key) ?? state.key }];
+    });
+    const removed = this.dbAll ? this.db.keys().filter((k) => !summaries.has(k)) : [...this.dbRemoved];
+    this.dbAll = false;
+    this.dbDirty.clear();
+    this.dbRemoved.clear();
+    this.db.update(rows, removed, { written_at: new Date().toISOString(), traceml_version: String(this.ctx.extension.packageJSON.version ?? '') });
+    await cache.writeRunsDb(this.db.export());
   }
 
   private async saveHidden(): Promise<void> {
@@ -317,7 +374,7 @@ class TraceMLController implements vscode.Disposable {
     }
 
     const { upserts, removed } = await this.store.sync(discovered, { force });
-    if (upserts.length || removed.length || force) this.scheduleIndexSave();
+    if (upserts.length || removed.length || force) this.scheduleIndexSave(upserts.map((u) => u.key), removed);
     const byKey = new Map<string, RunSummary>(upserts.map((u) => [u.key, u]));
 
     // Advance metric histories of plotted runs only.
@@ -399,14 +456,23 @@ class TraceMLController implements vscode.Disposable {
         case 'savePlot':
           await this.savePlot(msg.title, msg.data);
           break;
+        case 'savePlotData':
+          await this.savePlotData(msg.title, msg.csv, msg.csv.split('\n').length - 2);
+          break;
+        case 'saveLineData':
+          await this.saveLineData(msg.metric, msg.runKeys);
+          break;
         case 'copyPlotPath':
           if (this.lastPlot) {
-            await vscode.env.clipboard.writeText(this.lastPlot);
+            await vscode.env.clipboard.writeText(this.lastPlot.path);
             vscode.window.setStatusBarMessage('TraceML: plot path copied', 3000);
           }
           break;
         case 'openPlot':
-          if (this.lastPlot) await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(this.lastPlot), { preview: true });
+          if (this.lastPlot) {
+            const uri = this.lastPlot.csv ? this.readonlyFiles.uriFor(this.lastPlot.path) : vscode.Uri.file(this.lastPlot.path);
+            await vscode.commands.executeCommand('vscode.open', uri, { preview: true });
+          }
           break;
         case 'openSettings':
           await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:traceml.traceml');
@@ -475,13 +541,40 @@ class TraceMLController implements vscode.Disposable {
     try {
       const png = setPngDpi(bytes);
       const file = await this.cache().writePlot(plotFileName(title, new Date()), png);
-      this.lastPlot = file.fsPath;
+      this.lastPlot = { path: file.fsPath, csv: false };
       const { width, height } = pngSize(png);
       this.output.appendLine(`Saved plot ${width}x${height} px to ${file.fsPath}`);
       this.post({ type: 'plotSaved', path: file.fsPath, width, height });
     } catch (e) {
       this.reportError('Save plot failed', e);
     }
+  }
+
+  /** Writes a chart's data CSV into `<cache>/plots/`. */
+  private async savePlotData(title: string, csv: string, rows: number): Promise<void> {
+    try {
+      const file = await this.cache().writePlotData(plotFileName(title, new Date(), 'csv'), csv);
+      this.lastPlot = { path: file.fsPath, csv: true };
+      this.output.appendLine(`Saved chart data (${rows} rows) to ${file.fsPath}`);
+      this.post({ type: 'plotDataSaved', path: file.fsPath, rows: Math.max(0, rows) });
+    } catch (e) {
+      this.reportError('Save data failed', e);
+    }
+  }
+
+  /** Line chart data: the full (not downsampled) history of one metric for the plotted runs. */
+  private async saveLineData(metric: string, runKeys: string[]): Promise<void> {
+    const byKey = new Map(this.store.summaries().map((r) => [r.key, r]));
+    const runs = [];
+    for (const key of [...new Set(runKeys)]) {
+      const summary = byKey.get(key);
+      if (!summary) continue;
+      await this.store.pollHistory(key);
+      const h = this.store.history(key);
+      if (h) runs.push({ name: summary.name, path: this.store.dirOf(key) ?? key, history: h.history, startedAt: h.startedAt });
+    }
+    const { csv, rows } = lineCsv(metric, runs);
+    await this.savePlotData(metric, csv, rows);
   }
 
   /** Opens a run file read-only (only the fixed file names, only inside the run folder). */

@@ -1,6 +1,6 @@
 // Runs toolbar: search, Filter / Group / Columns / More, status segment, differing-params switch
 // and removable chips for every active filter.
-import { defaultVisibleColumns, parseColumnFilter, selectFiltered } from '../model/filters';
+import { NUMERIC_OPS, TEXT_OPS, buildFilterExpr, defaultVisibleColumns, describeFilter, parseColumnFilter, selectFiltered, suggestValues, type FilterOp } from '../model/filters';
 import type { ColumnDef } from '../model/run';
 import { DISPLAY_STATUSES, type DisplayStatus } from '../types';
 import { h } from './dom';
@@ -108,6 +108,8 @@ export class Toolbar {
   private segKey = '';
   private chipsKey = '';
   private chooserFilter = '';
+  /** Field last used in the filter builder. */
+  private filterField: string | null = null;
 
   constructor(private readonly st: AppState) {
     this.search = h('input', { type: 'search', class: 'search-input', placeholder: 'Search runs by name, id, group or tag…', value: st.s.filters.search, 'aria-label': 'Search runs', spellcheck: 'false' });
@@ -315,7 +317,7 @@ export class Toolbar {
       const c = cols.get(id);
       const isRoot = id === 'location' && expr.startsWith('/^');
       const label = isRoot ? 'run root' : c ? columnLabel(c) : id;
-      const shown = isRoot ? expr.slice(2, -3).replace(/\\(.)/g, '$1') : expr;
+      const shown = isRoot ? expr.slice(2, -3).replace(/\\(.)/g, '$1') : describeFilter(expr);
       const invalid = parseColumnFilter(expr).error;
       const el = chip(
         kv(label, shown),
@@ -368,17 +370,44 @@ export class Toolbar {
     const body = h('div', { class: 'pop-body filter-pop' });
     const render = () => {
       const conds = Object.entries(f.columns).filter(([id, v]) => v.trim() && id !== 'location');
-      const colSel = h('select', { 'aria-label': 'Field' }, ...fieldOptions(cols, null));
-      const expr = h('input', { type: 'text', placeholder: '> 0.8   0.1..0.5   text   /regex/', 'aria-label': 'Condition', spellcheck: 'false' });
+      // Builder: field -> operator -> value (with suggestions from the runs' own values).
+      const colSel = h('select', { 'aria-label': 'Field' }, ...fieldOptions(cols, this.filterField));
+      const opSel = h('select', { 'aria-label': 'Operator', class: 'cond-op' });
+      const suggest = h('datalist', { id: 'traceml-filter-values' });
+      const expr = h('input', { type: 'text', list: 'traceml-filter-values', 'aria-label': 'Value', spellcheck: 'false', autocomplete: 'off' });
       const err = h('div', { class: 'field-error', role: 'alert' });
+      const syncField = () => {
+        this.filterField = colSel.value;
+        const col = cols.find((c) => c.id === colSel.value);
+        const ops = col?.numeric ? NUMERIC_OPS : TEXT_OPS;
+        // Keep the chosen operator while the field type stays the same; otherwise use the type's default.
+        const prev = opSel.value as FilterOp;
+        const sameKind = opSel.dataset.numeric === String(!!col?.numeric);
+        opSel.dataset.numeric = String(!!col?.numeric);
+        opSel.replaceChildren(...ops.map((o) => h('option', { value: o }, o)));
+        opSel.value = sameKind && ops.includes(prev) ? prev : col?.numeric ? '>' : 'contains';
+        suggest.replaceChildren(...suggestValues(this.st.allRuns(), colSel.value).map((v) => h('option', { value: v })));
+        syncOp();
+      };
+      const syncOp = () => {
+        const op = opSel.value as FilterOp;
+        expr.placeholder = op === 'between' ? 'e.g. 0.1..0.5' : op === 'regex' ? 'e.g. ^adam' : 'type or pick a value';
+        err.textContent = '';
+      };
+      colSel.addEventListener('change', syncField);
+      opSel.addEventListener('change', syncOp);
       const add = () => {
-        if (!expr.value.trim()) return;
-        const e = parseColumnFilter(expr.value);
+        if (!expr.value.trim()) {
+          err.textContent = 'Enter a value';
+          return;
+        }
+        const built = buildFilterExpr(opSel.value as FilterOp, expr.value);
+        const e = parseColumnFilter(built);
         if (e.error) {
           err.textContent = e.error;
           return;
         }
-        f.columns[colSel.value] = expr.value.trim();
+        f.columns[colSel.value] = built;
         this.st.changed('table', 'toolbar', 'plots');
         render();
         body.querySelector<HTMLInputElement>('.cond-add input')?.focus();
@@ -386,6 +415,7 @@ export class Toolbar {
       expr.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') add();
       });
+      syncField();
       body.replaceChildren(
         h('div', { class: 'pop-title' }, 'Conditions'),
         conds.length
@@ -404,13 +434,13 @@ export class Toolbar {
                     render();
                   },
                 });
-                return h('div', { class: 'cond' }, h('span', { class: 'cond-field' }, c ? columnLabel(c) : id), h('code', { class: 'cond-expr' }, v), rm);
+                return h('div', { class: 'cond' }, h('span', { class: 'cond-field' }, c ? columnLabel(c) : id), h('code', { class: 'cond-expr', title: v }, describeFilter(v)), rm);
               }),
             )
           : h('div', { class: 'muted pop-note' }, 'No column conditions yet.'),
-        h('div', { class: 'cond-add' }, colSel, expr, button({ label: 'Add', icon: 'plus', variant: 'primary', onClick: add })),
+        h('div', { class: 'cond-add' }, colSel, opSel, expr, suggest, button({ label: 'Add', icon: 'plus', variant: 'primary', onClick: add })),
         err,
-        h('div', { class: 'pop-help muted' }, 'Numbers: > 0.8 · <= 1e-3 · 0.1..0.5 · = 64 · != 0   Text: substring or /regex/'),
+        h('div', { class: 'pop-help muted' }, 'Suggestions come from the values in your runs. Text matching ignores case; runs without a value never match. In the column filter inputs you can also type: > 0.8 · 0.1..0.5 · = adamw · != adamw · ~ adam (contains) · !~ adam (not contains) · /regex/'),
         h('div', { class: 'pop-sep' }),
         toggle('Show filter inputs under column headers', this.st.s.showFilterRow, (v) => {
           this.st.s.showFilterRow = v;
@@ -419,7 +449,7 @@ export class Toolbar {
       );
     };
     render();
-    openPopover(this.filterBtn, body, { width: 440, label: 'Filter conditions' });
+    openPopover(this.filterBtn, body, { width: 560, label: 'Filter conditions' });
   }
 
   private openGroup(): void {

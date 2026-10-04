@@ -9,7 +9,7 @@ import { buildRunSummary } from './model/run';
 import { parseConfigJson } from './parsers/configJson';
 import { parseMetricsJson } from './parsers/metricsJson';
 import { resolveInside } from './fsGuard';
-import { JsonlTail, PEEK_BYTES, peekJsonlHead } from './parsers/metricsJsonl';
+import { JsonlTail, PEEK_BYTES, peekJsonlHead, type MetricsHistory } from './parsers/metricsJsonl';
 import { parseParamsYaml } from './parsers/paramsYaml';
 import { parseRunJson } from './parsers/runJson';
 import { basename, joinPath } from './paths';
@@ -376,6 +376,12 @@ export class RunStore {
     const r = await e.tail.poll();
     changed = changed || r.changed;
     return { changed, summary: changed ? this.rebuildSummary(e, Date.now()) : null };
+  }
+
+  /** Loaded metric history of a run (call pollHistory first), with its start time. */
+  history(key: string): { history: MetricsHistory; startedAt: number | null } | null {
+    const e = this.entries.get(key);
+    return e?.tail ? { history: e.tail.history, startedAt: e.runJson.value?.startedAt ?? null } : null;
   }
 
   historyVersion(key: string): number {

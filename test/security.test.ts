@@ -57,7 +57,7 @@ describe('TraceML source is read-only', () => {
     expect(c).toMatch(/this\.exportsDir = vscode\.Uri\.joinPath\(dir, 'exports'\)/);
     expect(c).toMatch(/this\.plotsDir = vscode\.Uri\.joinPath\(dir, 'plots'\)/);
     // every write / delete / mkdir targets the cache folder or a fixed name joined onto it
-    const allowedTargets = ['this.dir', 'this.exportsDir', 'this.plotsDir', 'file', 'latest', 'ui', 'idx', 'hidden', 'vscode.Uri.joinPath(dir'];
+    const allowedTargets = ['this.dir', 'this.exportsDir', 'this.plotsDir', 'file', 'latest', 'ui', 'idx', 'hidden', 'tmp', 'vscode.Uri.joinPath(dir'];
     const calls = [...c.matchAll(/workspace\.fs\.(writeFile|delete|createDirectory)\(([^,)]*)/g)];
     expect(calls.length).toBeGreaterThan(0);
     for (const m of calls) expect(allowedTargets, `${m[1]}(${m[2]})`).toContain(m[2]!.trim());
@@ -68,10 +68,17 @@ describe('TraceML source is read-only', () => {
     expect(c).toMatch(/if \(!PLOT_NAME\.test\(name\)\) throw/);
     // prune() only deletes files of the folder it lists that match the strict name pattern
     expect(c).toMatch(/\.filter\(\(\[n, t\]\) => t === vscode\.FileType\.File && pattern\.test\(n\)\)/);
-    expect(c.match(/this\.prune\(/g)).toHaveLength(2);
+    expect(c.match(/this\.prune\(/g)).toHaveLength(3);
+    expect(c).toMatch(/if \(!PLOT_DATA_NAME\.test\(name\)\) throw/);
+    expect(c).toMatch(/this\.prune\(this\.plotsDir, PLOT_DATA_NAME, KEEP_PLOTS\)/);
     expect(c).toMatch(/this\.prune\(this\.exportsDir, EXPORT_NAME, KEEP_EXPORTS\)/);
     expect(c).toMatch(/this\.prune\(this\.plotsDir, PLOT_NAME, KEEP_PLOTS\)/);
-    expect(c).not.toMatch(/\.rename\(|\.copy\(/);
+    // the only rename: the database temp file onto runs.sqlite (atomic replace), both fixed names
+    expect(c.match(/\.rename\(/g)).toHaveLength(1);
+    expect(c).toMatch(/workspace\.fs\.rename\(tmp, db, \{ overwrite: true \}\)/);
+    expect(c).toMatch(/const tmp = vscode\.Uri\.joinPath\(this\.dir, RUNS_DB_TMP\)/);
+    expect(c).toMatch(/const db = vscode\.Uri\.joinPath\(this\.dir, RUNS_DB_FILE\)/);
+    expect(c).not.toMatch(/\.copy\(/);
     // the store is only created from the resolved cache setting (or VS Code's extension storage)
     const ext = ALL.find((x) => x.file === 'extension.ts')!.text;
     expect(ext.match(/new CacheStore\(/g)).toHaveLength(1);

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.18
+
+- **Run database: `traceml/.cache/runs.sqlite`.** A small SQLite file (sql.js, WebAssembly, nothing to install) replaces `runs-index.json`: the table still fills instantly on open, only changed runs are rewritten, and you or an agent can query runs, config and metrics with SQL. A 0.1.17 `runs-index.json` is migrated automatically; if SQLite can't load, TraceML falls back to it.
+- **Export chart data.** Every chart (line, scatter, box, bar) has a button that saves its data as plain CSV in `traceml/.cache/plots/`, ready to hand to an agent. Line charts export the full metric history, not the downsampled curve.
+- **Filter builder.** Pick a field, an operator (`=`, `!=`, `>`, `>=`, `<`, `<=`, between, contains, not contains, regex) and a value; values are suggested from your runs. The column filter inputs suggest values too and accept `= x`, `!= x`, `~ x` (contains) and `!~ x` (not contains). Existing filters keep working.
+- **Upgrade safety.** Tests cover a project left by an older TraceML: the runs are found in the same place, and old cache files (JSON exports, `ui-state.json`, `runs-index.json`) are migrated or ignored, never in the way.
+
 ## 0.1.17
 
 - **Faster start, lighter polling.** The parsed runs are saved in `traceml/.cache/runs-index.json`, so the table fills right away when TraceML opens and only changed files are parsed again. Completed, failed and killed runs are no longer re-checked on every poll, only on *Refresh* (and when the panel opens).

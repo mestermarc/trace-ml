@@ -65,16 +65,17 @@ class ChartCard {
   /** What the chart currently shows, so it can be re-rendered at export resolution. */
   private shown: { data: uPlot.AlignedData; xMode: XMode; logY: boolean; smooth: boolean } | null = null;
 
-  constructor(readonly metric: string, onRemove: () => void, onExport: () => void) {
+  constructor(readonly metric: string, onRemove: () => void, onExport: () => void, onData: () => void) {
     this.info = h('span', { class: 'chart-info' });
     this.note = h('div', { class: 'chart-note' });
     this.body = h('div', { class: 'chart-body', title: 'Drag to zoom · double-click to reset' }, this.note);
     const remove = button({ icon: 'close', title: `Remove ${metric}`, variant: 'ghost', cls: 'chart-remove', onClick: onRemove });
     const png = button({ icon: 'download', title: `Save ${metric} as PNG (300 DPI)`, variant: 'ghost', cls: 'chart-remove', onClick: onExport });
+    const data = button({ icon: 'file', title: `Save the data of ${metric} as CSV (full history, for agents)`, variant: 'ghost', cls: 'chart-remove', onClick: onData });
     this.el = h(
       'article',
       { class: 'chart-card', 'aria-label': `Chart ${metric}` },
-      h('header', { class: 'chart-head' }, h('span', { class: 'chart-group' }, metricGroup(metric)), h('span', { class: 'chart-title' }, metricShort(metric)), h('span', { class: 'spacer' }), this.info, png, remove),
+      h('header', { class: 'chart-head' }, h('span', { class: 'chart-group' }, metricGroup(metric)), h('span', { class: 'chart-title' }, metricShort(metric)), h('span', { class: 'spacer' }), this.info, data, png, remove),
       this.body,
     );
   }
@@ -547,6 +548,10 @@ export class Plots {
           m,
           () => this.setMetrics(this.st.plotMetrics().filter((x) => x !== m)),
           () => void this.exportCard(c),
+          () => {
+            const hidden = new Set(this.st.s.plot.hidden);
+            this.st.saveLineData(m, this.st.plottedRuns().filter((r) => !hidden.has(r.key)).map((r) => r.key));
+          },
         );
         card = c;
         this.cards.set(m, card);

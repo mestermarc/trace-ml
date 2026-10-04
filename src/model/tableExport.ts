@@ -96,8 +96,8 @@ export function exportFileName(d: Date): string {
   return `table-${stamp(d)}.csv`;
 }
 
-/** File name for a saved plot: `plot-<slug>-<UTC time>.png`, the slug made filesystem-safe. */
-export function plotFileName(title: string, d: Date): string {
+/** File name for a saved plot (`.png`) or its data (`.csv`): `plot-<slug>-<UTC time>.<ext>`, the slug made filesystem-safe. */
+export function plotFileName(title: string, d: Date, ext: 'png' | 'csv' = 'png'): string {
   const slug =
     title
       .toLowerCase()
@@ -105,5 +105,5 @@ export function plotFileName(title: string, d: Date): string {
       .replace(/^-+|-+$/g, '')
       .slice(0, 60)
       .replace(/-+$/, '') || 'chart';
-  return `plot-${slug}-${stamp(d)}.png`;
+  return `plot-${slug}-${stamp(d)}.${ext}`;
 }

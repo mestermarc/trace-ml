@@ -2,7 +2,7 @@
   "name": "traceml",
   "displayName": "TraceML",
   "description": "Read-only, filesystem-only viewer for ML training runs (tables, plots, comparison) inside VS Code. Works over Remote-SSH.",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "publisher": "mestermarc",
   "license": "MIT",
   "repository": {
@@ -86,7 +86,7 @@
         "traceml.cacheDir": {
           "type": "string",
           "default": "./traceml/.cache",
-          "markdownDescription": "Folder where TraceML keeps its own files: the remembered view (`ui-state.json`), the run index (`runs-index.json`), runs deleted from TraceML (`hidden-runs.json`), CSV table exports (`exports/`) and PNG plots (`plots/`). A path relative to the (first) workspace folder or an absolute path. This is the only place TraceML writes; run folders are never modified."
+          "markdownDescription": "Folder where TraceML keeps its own files: the remembered view (`ui-state.json`), the run database (`runs.sqlite`), runs deleted from TraceML (`hidden-runs.json`), CSV table exports (`exports/`) and plots / plot data (`plots/`). A path relative to the (first) workspace folder or an absolute path. This is the only place TraceML writes; run folders are never modified."
         }
       }
     },
@@ -129,11 +129,13 @@
     "vscode:prepublish": "node esbuild.mjs --production"
   },
   "dependencies": {
+    "sql.js": "^1.14.2",
     "uplot": "^1.6.31",
     "yaml": "^2.5.0"
   },
   "devDependencies": {
     "@types/node": "^20.19.0",
+    "@types/sql.js": "^1.4.11",
     "@types/vscode": "~1.85.0",
     "@vscode/vsce": "^3.2.0",
     "esbuild": "^0.28.2",

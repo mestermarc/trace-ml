@@ -3,6 +3,7 @@
 // its state. Run-level charts use only data already in the webview (params + metrics.json
 // summaries); they never request metrics.jsonl histories.
 import { barData, boxData, logTicks, niceTicks, NONE_GROUP, scatterData, type BarData, type BoxData, type ScatterData } from '../model/analysis';
+import { barCsv, boxCsv, scatterCsv } from '../model/plotData';
 import { parseColumnId } from '../model/run';
 import { cssVar, formatDuration, formatNumber, formatTime, h, palette, withAlpha } from './dom';
 import { fieldOptions } from './filters';
@@ -145,10 +146,24 @@ export class Analysis {
                 void this.exportChart(id);
               },
             });
+      const dataBtn =
+        id === 'line'
+          ? null
+          : button({
+              icon: 'file',
+              title: `Save the ${sec.title.toLowerCase()} chart's data as CSV (for agents)`,
+              variant: 'ghost',
+              cls: 'viz-png',
+              onClick: (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this.exportData(id);
+              },
+            });
       const details = h(
         'details',
         { class: 'viz-section', open: !collapsed.has(sec.id) },
-        h('summary', {}, icon('chevronRight', 14), icon(sec.icon, 15), h('h2', {}, sec.title), h('span', { class: 'viz-hint' }, sec.hint), h('span', { class: 'spacer' }), scope, png),
+        h('summary', {}, icon('chevronRight', 14), icon(sec.icon, 15), h('h2', {}, sec.title), h('span', { class: 'viz-hint' }, sec.hint), h('span', { class: 'spacer' }), scope, dataBtn, png),
         sec.id === 'line' ? plots.el : this.charts[sec.id].body,
       ) as HTMLDetailsElement;
       details.addEventListener('toggle', () => {
@@ -299,6 +314,30 @@ export class Analysis {
       if (key === c.renderedKey) return;
       c.renderedKey = key;
       this.drawBar(c, data, r.barField, r.barGroup, mode, b.mode === 'groups' && !r.barGroup, width, runs.length);
+    }
+  }
+
+  /**
+   * Saves a scatter / box / bar chart's data as CSV: the same run-level values the chart uses
+   * (all filtered runs; bar charts include runs beyond the bars drawn).
+   */
+  private exportData(kind: RunLevelKind): void {
+    const r = this.resolved();
+    const runs = this.st.filteredRuns();
+    const label = (f: string | null) => (f ? this.st.fieldLabel(f) : '');
+    if (kind === 'scatter') {
+      if (!r.x || !r.y) return this.st.showError('Nothing to export: choose X and Y.');
+      const d = scatterData(runs, r.x, r.y, { sizeField: r.size, groupField: r.color });
+      this.st.savePlotData(`scatter ${label(r.y)} vs ${label(r.x)}`, scatterCsv(d, r.x, r.y, r.size, r.color));
+    } else if (kind === 'box') {
+      if (!r.boxField) return this.st.showError('Nothing to export: choose a field.');
+      this.st.savePlotData(`box ${label(r.boxField)}`, boxCsv(boxData(runs, r.boxField, r.boxGroup), r.boxField, r.boxGroup));
+    } else {
+      if (!r.barField) return this.st.showError('Nothing to export: choose a field.');
+      const b = this.st.s.analysis.bar;
+      const mode = b.mode === 'groups' && r.barGroup ? 'groups' : 'runs';
+      const d = barData(runs, r.barField, { mode, groupField: r.barGroup, sort: b.sort, limit: Number.POSITIVE_INFINITY });
+      this.st.savePlotData(`bar ${label(r.barField)}`, barCsv(d, r.barField, r.barGroup, mode));
     }
   }
 

@@ -237,6 +237,14 @@ export class Shell {
         button({ label: 'Copy path', icon: 'check', variant: 'secondary', cls: 'btn-small', onClick: () => this.st.post({ type: 'copyPlotPath' }) }),
         button({ label: 'Open', variant: 'ghost', cls: 'btn-small', title: 'Open the image', onClick: () => this.st.post({ type: 'openPlot' }) }),
       ];
+    } else if (n.kind === 'plotData') {
+      parts = [
+        icon('file', 15),
+        h('span', {}, `Saved chart data as CSV (${n.rows} row${n.rows === 1 ? '' : 's'}) to `),
+        path(n.path, 'Give this path to an agent'),
+        button({ label: 'Copy path', icon: 'check', variant: 'secondary', cls: 'btn-small', onClick: () => this.st.post({ type: 'copyPlotPath' }) }),
+        button({ label: 'Open', variant: 'ghost', cls: 'btn-small', title: 'Open the CSV (read-only)', onClick: () => this.st.post({ type: 'openPlot' }) }),
+      ];
     } else {
       const what = n.names.length === 1 ? `“${n.names[0]}”` : `${n.names.length} runs`;
       const listBtn: HTMLButtonElement = button({ label: `Deleted runs (${this.st.hiddenRuns.length})`, variant: 'ghost', cls: 'btn-small', onClick: () => openHiddenRuns(this.st, listBtn) });

@@ -16,7 +16,9 @@ export type HostToWebview =
   /** Runs deleted from TraceML (hidden; their folders are untouched). Sent on start and on every change. */
   | { type: 'hiddenRuns'; runs: HiddenRun[] }
   /** A plot was saved as PNG. */
-  | { type: 'plotSaved'; path: string; width: number; height: number };
+  | { type: 'plotSaved'; path: string; width: number; height: number }
+  /** A chart's data was saved as CSV. */
+  | { type: 'plotDataSaved'; path: string; rows: number };
 
 export type WebviewToHost =
   | { type: 'ready' }
@@ -39,6 +41,10 @@ export type WebviewToHost =
   | { type: 'unhideRuns'; runKeys: string[] }
   /** Save a rendered plot (base64 PNG) into the cache folder; `title` names the file. */
   | { type: 'savePlot'; title: string; data: string }
+  /** Save a scatter / box / bar chart's data (CSV built by the webview from run-level values). */
+  | { type: 'savePlotData'; title: string; csv: string }
+  /** Save a line chart's data: the host writes the full history of `metric` for these runs. */
+  | { type: 'saveLineData'; metric: string; runKeys: string[] }
   | { type: 'copyPlotPath' }
   | { type: 'openPlot' };
 
@@ -83,6 +89,7 @@ export function parseExportRequest(r: unknown): ExportRequest | null {
 export const MAX_UI_STATE_BYTES = 512 * 1024;
 
 const MAX_BASE64 = Math.ceil(MAX_PNG_BYTES / 3) * 4;
+const MAX_CSV_CHARS = 32 * 1024 * 1024;
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
 const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
@@ -103,6 +110,12 @@ export function parseWebviewMessage(msg: unknown): WebviewToHost | null {
     case 'hideRuns':
     case 'unhideRuns':
       return isStringArray(m.runKeys) && m.runKeys.length <= 100_000 ? { type: m.type, runKeys: m.runKeys } : null;
+    case 'savePlotData':
+      if (typeof m.title === 'string' && m.title.length <= 200 && typeof m.csv === 'string' && m.csv.length <= MAX_CSV_CHARS) return { type: 'savePlotData', title: m.title, csv: m.csv };
+      return null;
+    case 'saveLineData':
+      if (typeof m.metric === 'string' && m.metric.length <= 500 && isStringArray(m.runKeys) && m.runKeys.length <= 1000) return { type: 'saveLineData', metric: m.metric, runKeys: m.runKeys };
+      return null;
     case 'savePlot':
       if (typeof m.title === 'string' && m.title.length <= 200 && typeof m.data === 'string' && m.data.length <= MAX_BASE64 && BASE64.test(m.data)) {
         return { type: 'savePlot', title: m.title, data: m.data };

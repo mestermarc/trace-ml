@@ -9,6 +9,10 @@ export interface ColumnFilter {
 
 const NUM = String.raw`[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?`;
 const CMP_RE = new RegExp(String.raw`^(>=|<=|!=|==|=|>|<)\s*(${NUM})$`);
+/** `= text` / `!= text`: exact text match (case-insensitive). */
+const TEXT_EQ_RE = /^(==|=|!=)\s*(.+)$/;
+/** `~ text` contains, `!~ text` does not contain (case-insensitive). */
+const CONTAINS_RE = /^(!?)~\s*(.*)$/;
 const RANGE_RE = new RegExp(String.raw`^(${NUM})\s*\.\.\s*(${NUM})$`);
 const NUM_RE = new RegExp(String.raw`^${NUM}$`);
 
@@ -23,8 +27,9 @@ function asNumber(v: Scalar): number | null {
 /**
  * Parses a per-column filter expression.
  *   numeric:  `> 0.8`, `<= 1e-3`, `0.1..0.5`, `!= 0`, `= 64`, or a bare number (equality)
- *   string:   `substring` (case-insensitive) or `/regex/flags`
- * Null cells only match the empty expression.
+ *   text:     `= adamw` / `!= adamw` (exact), `~ adam` (contains), `!~ adam` (does not contain),
+ *             a bare `substring` (contains) or `/regex/flags`
+ * All text matching is case-insensitive. Null (missing) cells only match the empty expression.
  */
 export function parseColumnFilter(expr: string): ColumnFilter {
   const e = expr.trim();
@@ -38,6 +43,14 @@ export function parseColumnFilter(expr: string): ColumnFilter {
     } catch (err) {
       return { test: () => true, error: `invalid regex: ${err instanceof Error ? err.message : String(err)}` };
     }
+  }
+
+  const contains = CONTAINS_RE.exec(e);
+  if (contains) {
+    const negate = contains[1] === '!';
+    const needle = contains[2]!.trim().toLowerCase();
+    if (!needle) return { test: () => true, error: 'enter the text to look for' };
+    return { error: null, test: (v) => v !== null && String(v).toLowerCase().includes(needle) !== negate };
   }
 
   const cmp = CMP_RE.exec(e);
@@ -67,6 +80,13 @@ export function parseColumnFilter(expr: string): ColumnFilter {
     };
   }
 
+  const textEq = TEXT_EQ_RE.exec(e);
+  if (textEq) {
+    const negate = textEq[1] === '!=';
+    const want = textEq[2]!.trim().toLowerCase();
+    return { error: null, test: (v) => v !== null && (String(v).toLowerCase() === want) !== negate };
+  }
+
   const range = RANGE_RE.exec(e);
   if (range) {
     const a = Number(range[1]);
@@ -92,6 +112,58 @@ export function parseColumnFilter(expr: string): ColumnFilter {
       return String(v).toLowerCase().includes(needle);
     },
   };
+}
+
+/** Operators offered by the filter builder. */
+export type FilterOp = '=' | '!=' | '>' | '>=' | '<' | '<=' | 'between' | 'contains' | 'not contains' | 'regex';
+export const NUMERIC_OPS: readonly FilterOp[] = ['=', '!=', '>', '>=', '<', '<=', 'between', 'contains', 'not contains'];
+export const TEXT_OPS: readonly FilterOp[] = ['=', '!=', 'contains', 'not contains', 'regex'];
+
+/** Builds the stored expression for an operator and a value (the inverse of describeFilter). */
+export function buildFilterExpr(op: FilterOp, value: string): string {
+  const v = value.trim();
+  switch (op) {
+    case 'contains':
+      return `~ ${v}`;
+    case 'not contains':
+      return `!~ ${v}`;
+    case 'regex':
+      return /^\/.*\/[a-z]*$/.test(v) ? v : `/${v}/`;
+    case 'between': {
+      const m = /^(\S+)\s*(?:\.\.|,|-|\s)\s*(\S+)$/.exec(v);
+      return m ? `${m[1]}..${m[2]}` : v;
+    }
+    default:
+      return `${op} ${v}`;
+  }
+}
+
+/** Human-readable form of an expression, for chips and lists: `~ adam` -> `contains adam`. */
+export function describeFilter(expr: string): string {
+  const e = expr.trim();
+  const c = CONTAINS_RE.exec(e);
+  if (c && !/^\/.*\/[a-z]*$/.test(e)) return `${c[1] ? 'not contains' : 'contains'} ${c[2]!.trim()}`;
+  if (RANGE_RE.test(e)) return `between ${e.replace(/\s*\.\.\s*/, ' and ')}`;
+  if (CMP_RE.test(e) || TEXT_EQ_RE.test(e) || /^\/.*\/[a-z]*$/.test(e)) return e.replace(/^==/, '=');
+  return NUM_RE.test(e) ? `= ${e}` : `contains ${e}`;
+}
+
+/**
+ * Value suggestions for a column: its distinct non-empty values among the runs, most frequent
+ * first (ties in natural order), formatted as they would be typed.
+ */
+export function suggestValues(runs: readonly RunSummary[], colId: string, limit = 50): string[] {
+  const counts = new Map<string, number>();
+  for (const r of runs) {
+    const v = columnValue(r, colId);
+    if (v === null || v === '' || (typeof v === 'number' && !Number.isFinite(v))) continue;
+    for (const part of colId === 'tags' ? r.tags : [String(v)]) counts.set(part, (counts.get(part) ?? 0) + 1);
+  }
+  const natural = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+  return [...counts]
+    .sort((a, b) => b[1] - a[1] || natural.compare(a[0], b[0]))
+    .slice(0, limit)
+    .map(([v]) => v);
 }
 
 /** Free-text search over id / name / group / tags. Every whitespace-separated term must match. */

@@ -11,12 +11,16 @@ export const LATEST_EXPORT = 'latest.csv';
 export const UI_STATE_FILE = 'ui-state.json';
 export const RUNS_INDEX_FILE = 'runs-index.json';
 export const HIDDEN_RUNS_FILE = 'hidden-runs.json';
+export const RUNS_DB_FILE = 'runs.sqlite';
+const RUNS_DB_TMP = '.runs.sqlite.tmp';
 /** Upper bounds when reading our own files back. */
 const MAX_UI_STATE_READ = 1024 * 1024;
 const MAX_INDEX_READ = 64 * 1024 * 1024;
 const MAX_HIDDEN_READ = 8 * 1024 * 1024;
+const MAX_DB_READ = 256 * 1024 * 1024;
 export const EXPORT_NAME = /^table-\d{8}-\d{6}\.csv$/;
 export const PLOT_NAME = /^plot-[a-z0-9_-]{1,60}-\d{8}-\d{6}(?:-\d{1,3})?\.png$/;
+export const PLOT_DATA_NAME = /^plot-[a-z0-9_-]{1,60}-\d{8}-\d{6}(?:-\d{1,3})?\.csv$/;
 
 export class CacheStore {
   private readonly exportsDir: vscode.Uri;
@@ -51,6 +55,16 @@ export class CacheStore {
     const file = vscode.Uri.joinPath(this.plotsDir, name);
     await vscode.workspace.fs.writeFile(file, bytes);
     await this.prune(this.plotsDir, PLOT_NAME, KEEP_PLOTS);
+    return file;
+  }
+
+  /** Writes `plots/<name>` (a chart's data as CSV); returns its path. */
+  async writePlotData(name: string, text: string): Promise<vscode.Uri> {
+    if (!PLOT_DATA_NAME.test(name)) throw new Error(`invalid plot data file name: ${name}`);
+    await vscode.workspace.fs.createDirectory(this.plotsDir);
+    const file = vscode.Uri.joinPath(this.plotsDir, name);
+    await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(text));
+    await this.prune(this.plotsDir, PLOT_DATA_NAME, KEEP_PLOTS);
     return file;
   }
 
@@ -94,6 +108,26 @@ export class CacheStore {
 
   readRunsIndex(): Promise<string | null> {
     return this.readText(RUNS_INDEX_FILE, MAX_INDEX_READ);
+  }
+
+  /** Writes the run database atomically (temp file, then rename), so readers never see half a file. */
+  async writeRunsDb(bytes: Uint8Array): Promise<void> {
+    const tmp = vscode.Uri.joinPath(this.dir, RUNS_DB_TMP);
+    const db = vscode.Uri.joinPath(this.dir, RUNS_DB_FILE);
+    await vscode.workspace.fs.createDirectory(this.dir);
+    await vscode.workspace.fs.writeFile(tmp, bytes);
+    await vscode.workspace.fs.rename(tmp, db, { overwrite: true });
+  }
+
+  /** The run database bytes, or null when missing, too large or unreadable. */
+  async readRunsDb(): Promise<Uint8Array | null> {
+    try {
+      const uri = vscode.Uri.joinPath(this.dir, RUNS_DB_FILE);
+      if ((await vscode.workspace.fs.stat(uri)).size > MAX_DB_READ) return null;
+      return await vscode.workspace.fs.readFile(uri);
+    } catch {
+      return null;
+    }
   }
 
   async writeHiddenRuns(text: string): Promise<void> {

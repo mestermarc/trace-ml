@@ -17,6 +17,7 @@ export type AppView = 'overview' | 'runs' | 'compare';
 export type Notice =
   | { kind: 'export'; path: string; rows: number }
   | { kind: 'plot'; path: string; width: number; height: number }
+  | { kind: 'plotData'; path: string; rows: number }
   | { kind: 'deleted'; keys: string[]; names: string[] };
 
 /** One row of the (possibly grouped) run table. */
@@ -246,6 +247,10 @@ export class AppState {
         this.exporting = false;
         this.notice = { kind: 'export', path: msg.path, rows: msg.rows };
         this.changed('status', 'toolbar');
+        break;
+      case 'plotDataSaved':
+        this.notice = { kind: 'plotData', path: msg.path, rows: msg.rows };
+        this.changed('status');
         break;
       case 'plotSaved':
         this.notice = { kind: 'plot', path: msg.path, width: msg.width, height: msg.height };
@@ -478,6 +483,16 @@ export class AppState {
   showError(message: string): void {
     this.error = message;
     this.changed('status');
+  }
+
+  /** Asks the host to save a chart's data as CSV (run-level charts: built here). */
+  savePlotData(title: string, csv: string): void {
+    this.post({ type: 'savePlotData', title, csv });
+  }
+
+  /** Asks the host to save a line chart's data (full history of the metric for these runs). */
+  saveLineData(metric: string, runKeys: string[]): void {
+    this.post({ type: 'saveLineData', metric, runKeys });
   }
 
   /** Asks the host to save a rendered chart (base64 PNG) into the cache folder. */

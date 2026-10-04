@@ -2287,3 +2287,8 @@ tr.cmp-section th {
   left: -100000px;
   pointer-events: none;
 }
+
+.cond-add select.cond-op {
+  flex: none;
+  width: 116px;
+}

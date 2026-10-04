@@ -1,6 +1,6 @@
 // Virtualized run table: only rows in view exist in the DOM, and rows are keyed so a live refresh
 // only rewrites rows whose content actually changed (no flicker, 1,000+ runs stay responsive).
-import { parseColumnFilter } from '../model/filters';
+import { describeFilter, parseColumnFilter, suggestValues } from '../model/filters';
 import { columnValue, toggleSort, type ColumnDef } from '../model/run';
 import type { RunSummary } from '../types';
 import { esc, formatDuration, formatScalar, formatTime, h, nextFrame, palette } from './dom';
@@ -153,13 +153,23 @@ export class RunTable {
         spellcheck: 'false',
       });
       input.dataset.filterCol = c.id;
+      // Suggestions: this column's values among the runs (one shared datalist, filled on focus).
+      input.setAttribute('list', 'traceml-col-values');
+      input.addEventListener('focus', () => {
+        let dl = document.getElementById('traceml-col-values');
+        if (!dl) {
+          dl = h('datalist', { id: 'traceml-col-values' });
+          document.body.append(dl);
+        }
+        dl.replaceChildren(...suggestValues(this.st.allRuns(), c.id, 30).map((v) => h('option', { value: v })));
+      });
       input.addEventListener('input', () => {
         const v = input.value;
         if (v.trim()) this.st.s.filters.columns[c.id] = v;
         else delete this.st.s.filters.columns[c.id];
         const err = parseColumnFilter(v).error;
         input.classList.toggle('invalid', err !== null);
-        input.title = err ?? '';
+        input.title = err ?? (v.trim() ? describeFilter(v) : '');
         clearTimeout(this.filterTimer);
         this.filterTimer = setTimeout(() => this.st.changed('table', 'toolbar', 'plots', 'nav'), 150);
       });

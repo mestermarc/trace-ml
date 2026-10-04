@@ -6,7 +6,7 @@ TraceML is a VS Code extension for browsing ML training runs. It finds runs on t
 
 The filesystem is the only source of truth. There is no server, no database, no HTTP endpoint and no browser app. Everything runs inside VS Code, including over **Remote-SSH**, where the extension reads the runs directly on the remote machine.
 
-**TraceML is read-only for your runs.** It never creates, modifies or deletes anything in your run folders (even *Delete* only hides a run in TraceML), it makes no network calls, and it reads only inside the runs folders you configure. Its own small files (remembered view, run index, CSV exports, saved plots) go to `traceml/.cache`. See [Security and resource use](#security-and-resource-use).
+**TraceML is read-only for your runs.** It never creates, modifies or deletes anything in your run folders (even *Delete* only hides a run in TraceML), it makes no network calls, and it reads only inside the runs folders you configure. Its own small files (remembered view, run database, CSV exports, saved plots) go to `traceml/.cache`. See [Security and resource use](#security-and-resource-use).
 
 **Quick start**
 
@@ -225,7 +225,7 @@ The packaged extension doesn't need Node, npm or any other process running.
 | `traceml.refreshIntervalSeconds` | `5` | How often TraceML polls for changes, in seconds. |
 | `traceml.staleAfterSeconds` | `60` | A `running` run whose heartbeat is older than this is shown as `stale`. |
 | `traceml.maxPointsPerSeries` | `5000` | Series longer than this are downsampled before plotting. |
-| `traceml.cacheDir` | `./traceml/.cache` | TraceML's own folder: the remembered view (`ui-state.json`), the run index (`runs-index.json`), the runs deleted from TraceML (`hidden-runs.json`), CSV exports (`exports/`) and saved plots (`plots/`). Relative to the first workspace folder, or an absolute path. It's the only place TraceML writes. |
+| `traceml.cacheDir` | `./traceml/.cache` | TraceML's own folder: the remembered view (`ui-state.json`), the run database (`runs.sqlite`), the runs deleted from TraceML (`hidden-runs.json`), CSV exports (`exports/`) and saved plots and plot data (`plots/`). Relative to the first workspace folder, or an absolute path. It's the only place TraceML writes. |
 | `traceml.maxMetricsFileMB` | `64` | At most this many MB of each plotted run's `metrics.jsonl` are loaded into memory. A larger file is plotted partially, with a warning. |
 
 ## The UI
@@ -256,10 +256,11 @@ TraceML uses a dark-only application shell with its own design system, inside a 
 - **Overview:** status counts (click one to jump to those runs), active runs (running or stale, with their heartbeat age), the most recent runs with a key metric, and the run roots.
 - **Runs** is the main workspace:
   - **Search** covers id, name, group and tags. Esc clears it.
-  - **Filter** opens a panel for adding column conditions. Pick a field and an expression:
-    - Numbers: `> 0.8`, `>= 0.8`, `< 1e-3`, `<= 1e-3`, `= 64`, `!= 0`, an inclusive range like `0.1..0.5`, or a bare number for equality.
-    - Text: a case-insensitive substring, or `/regex/`.
-    - The same panel can also show per-column filter inputs under the table headers.
+  - **Filter** opens a panel for adding column conditions: pick a **field**, an **operator** and a **value**.
+    - Operators for numbers: `=`, `!=`, `>`, `>=`, `<`, `<=`, *between* (`0.1..0.5`), *contains*, *not contains*. For text: `=`, `!=`, *contains*, *not contains*, *regex*.
+    - The value box **suggests values from your runs** (most frequent first), e.g. `adamw`, `sgd` for `optim.name`.
+    - Text matching ignores case. Runs without a value for the field never match a condition.
+    - The same panel can also show per-column filter inputs under the table headers. They suggest values too, and accept the operators typed directly: `> 0.8`, `0.1..0.5`, `= adamw`, `!= adamw`, `~ adam` (contains), `!~ adam` (not contains), `/regex/`, or plain text (contains). Filters saved by older versions keep working.
   - **Status segment:** *All* · Running · Stale · Completed · Failed · Killed · Unknown, with counts. You can combine several statuses.
   - **Differing params only:** shows only the config columns whose values differ between the filtered runs.
   - **Starting values:** adds each metric's starting value (its first logged, non-null value in `metrics.jsonl`) as `start` columns next to the metrics already shown. It also adds them to the Columns chooser, the scatter/box/bar fields, the inspector and the Compare view, so you can see whether runs started from the same point.
@@ -288,6 +289,7 @@ TraceML uses a dark-only application shell with its own design system, inside a 
       - Hovering highlights the nearest line and shows a tooltip. Click a legend entry to hide or show a run, or double-click it to open the run.
       - Drag across a chart to zoom, and double-click to reset. Live updates keep your zoom.
       - The ⤓ button on a chart saves it as a **300 DPI PNG** (title, chart and legend, at the current zoom) to `traceml/.cache/plots/`. A bar shows the path, with *Copy path* and *Open*.
+      - The 🗎 button saves the chart's **data as CSV** instead, for agents: the full (not downsampled) history of the metric for the plotted runs, one row per logged value (`run,path,step,epoch,time_s,<metric>`). See [Exporting chart data](#exporting-chart-data).
       - `null` values show as gaps; a missing value is simply absent. At most 30 runs are plotted.
     - **Scatter** (all filtered runs, run-level data only):
       - X and Y can be any numeric field, and you can swap them. There's an optional *Size* field, a *Color* field (*auto* follows the grouping), and Log X / Log Y.
@@ -298,7 +300,7 @@ TraceML uses a dark-only application shell with its own design system, inside a 
       - *One per run* draws horizontal bars, colored by the Group field if one is set, with at most 60 bars; filter to narrow down. Click a bar to open the run.
       - *Group mean (min–max)* draws one bar per group with a whisker from min to max and the run count.
       - Sort by highest first, lowest first or table order. *Start at zero* (on by default) keeps bar lengths honest; turn it off to fit the axis to the data range. Sorting is a display choice only; TraceML never ranks runs.
-    - The ⤓ button in the Scatter, Box and Bar section headers saves that chart as a 300 DPI PNG, like the line charts.
+    - The ⤓ button in the Scatter, Box and Bar section headers saves that chart as a 300 DPI PNG, like the line charts. The 🗎 button next to it saves the chart's data as CSV.
 - **Remembered view:** the plotted metrics, selected runs, filters, sort order, columns and their order, grouping, chart settings and collapsed sections are restored when you reopen TraceML or reload the window. They're saved in `traceml/.cache/ui-state.json` (see `traceml.cacheDir`).
 - **Run inspector:** a side panel that opens when you click a run in any view.
   - *Header:* name, status, group, start time, tags and id, plus *Select* and *Delete* (hide from TraceML; files are not touched) buttons.
@@ -684,7 +686,7 @@ class TraceMLRun:
   2. It stats the core files of each **running** run and re-parses only files whose mtime or size changed.
   3. It advances the `metrics.jsonl` of the **plotted** runs by reading only the newly appended bytes. If the file shrank, it starts over from the beginning.
 - **Finished runs are frozen.** Completed, failed and killed runs aren't re-checked on polls, because their files no longer change. They're checked again (by stat, re-parsed only if changed) when you press *Refresh*, open the panel or change a setting.
-- **Run index.** The parsed state of every run is saved in `traceml/.cache/runs-index.json` (at most every 10 s while runs change). When TraceML opens, the table is filled from the index right away. Then each run's files are stat'ed once, and only changed files are parsed again. Without an index, the first scan parses every run. The index is only a cache: deleting it is harmless, and a corrupt or edited index is ignored entry by entry.
+- **Run database.** The runs are saved in `traceml/.cache/runs.sqlite` (at most every 10 s while runs change; only changed runs are rewritten). When TraceML opens, the table is filled from it right away. Then each run's files are stat'ed once, and only changed files are parsed again. Without the database, the first scan parses every run. It's only a cache: deleting it is harmless, and a corrupt, edited or other-version file is rebuilt from the run folders. A `runs-index.json` left by 0.1.17 is read once and migrated. See [The run database](#the-run-database).
 - Only changed runs are sent to the panel. Sort order, filters, selection, zoom and column choices are all kept across updates.
 - Stale runs change status automatically as their heartbeat ages.
 - Polling stays the reliable baseline even if a filesystem watcher is added later.
@@ -692,6 +694,29 @@ class TraceMLRun:
 ## Remote-SSH
 
 With `"extensionKind": ["workspace"]`, the extension host, and so all filesystem access, runs on the remote machine next to the runs. Only small JSON messages cross the connection: run summaries, and downsampled series for the runs you're plotting. Nothing needs to be installed on the remote beyond the extension itself. You don't need Node, npm or Python packages there. To browse runs outside the opened folder, add an absolute path to `traceml.roots`, e.g. `"/scratch/me/project/runs"`.
+
+## The run database
+
+`traceml/.cache/runs.sqlite` is a small SQLite file with the runs TraceML shows (deleted runs excluded). Open it with `sqlite3`, DB Browser for SQLite, pandas (`pd.read_sql`) or give it to an agent:
+
+| Table | Columns |
+| --- | --- |
+| `runs` | `key` (run directory), `id`, `name`, `group_name`, `tags` (`;`-separated), `notes`, `status` (from `run.json`), `display_status` (adds `stale`), `started_at` / `ended_at` / `heartbeat_at` (ISO-8601 UTC), `duration_s`, `step`, `epoch`, `path`, `location`, `legacy`, `warnings` |
+| `config` | `run_key`, `key`, `value`: one row per config value (`params.yaml`); booleans are 1/0 |
+| `metrics` | `run_key`, `metric`, `kind` (`start`, `last`, `best` or `summary`), `value`, and for `best` the `step` and `mode` |
+
+```sql
+-- the 5 runs with the best val/auc, with their learning rate
+SELECT r.name, c.value AS lr, m.value AS best_auc
+FROM runs r
+JOIN metrics m ON m.run_key = r.key AND m.metric = 'val/auc' AND m.kind = 'best'
+LEFT JOIN config c ON c.run_key = r.key AND c.key = 'optim.lr'
+ORDER BY best_auc DESC LIMIT 5;
+```
+
+- The full per-epoch history is not copied; it stays in each run's `metrics.jsonl` (`path` points to the run folder). `run_cache` and `meta` are TraceML's own bookkeeping.
+- The file is replaced atomically, so a reader never sees half a file. It reflects the runs as of the last save (up to 10 s old); treat it as read-only, since TraceML overwrites it.
+- SQLite runs inside the extension as WebAssembly (sql.js, bundled). There is no native module, no server and nothing to install, also over Remote-SSH. If it can't be loaded, TraceML falls back to `runs-index.json`.
 
 ## Exporting the table for an agent
 
@@ -704,13 +729,14 @@ With `"extensionKind": ["workspace"]`, the extension host, and so all filesystem
 ├── runs/                      ← your runs (read-only for TraceML)
 └── .cache/                    ← written by TraceML only
     ├── ui-state.json          ← remembered view (metrics, selection, filters, columns, charts)
-    ├── runs-index.json        ← parsed runs, for a fast start (safe to delete)
+    ├── runs.sqlite            ← run database: fast start + SQL queries (safe to delete)
     ├── hidden-runs.json       ← runs deleted from TraceML (folders untouched)
     ├── exports/
     │   ├── latest.csv         ← newest export: give this path to an agent
     │   └── table-20261001-102030.csv
     └── plots/
-        └── plot-val-auc-20261001-102512.png   ← saved charts (300 DPI)
+        ├── plot-val-auc-20261001-102512.png   ← saved charts (300 DPI)
+        └── plot-bar-best-val-auc-20261001-102530.csv   ← saved chart data
 ```
 
 Each export is saved as `table-YYYYMMDD-HHMMSS.csv` (UTC), and the newest is always also `latest.csv`, so an agent can simply read `traceml/.cache/exports/latest.csv`. Only the 20 newest timestamped exports (and the 50 newest plots) are kept. Add `traceml/.cache/` to your `.gitignore`.
@@ -726,12 +752,30 @@ id,name,status,group,tags,path,started,duration_s,config.optim.lr,run.best.val/a
 - The other columns follow the table. Logged values are named by kind: `config.<key>` (`params.yaml`), `run.start.<metric>` / `run.last.<metric>` / `run.best.<metric>` (the metric history) and `summary.<key>` (final values). Fixed columns keep their names (`started`, `duration_s`, …). Timestamps are ISO-8601 UTC, and empty cells are missing or `null` values.
 - The export is built by the extension from its own run data; the panel only says which runs and columns are shown. Run data is never modified.
 
+## Exporting chart data
+
+Every chart has a 🗎 button that saves the data behind it as a CSV file in `traceml/.cache/plots/`, so you can pass the chart (e.g. a bar plot) to an agent as plain text. A bar then shows the path with *Copy path* and *Open*. Columns use the same names as the table export (`config.*`, `run.best.*`, `summary.*`, …):
+
+| Chart | CSV columns |
+| --- | --- |
+| Line | `run,path,step,epoch,time_s,<metric>`: every logged value of the metric for the plotted runs, full history (not downsampled), empty = `null` |
+| Bar, one per run | `run,path,[group:<field>],<field>`: all filtered runs, also those beyond the 60 bars drawn |
+| Bar, group mean | `group:<field>,n,mean <field>,min <field>,max <field>` |
+| Scatter | `run,path,<x>,<y>,[<size>],[group:<field>]` |
+| Box | `group:<field>,run,path,<field>`: one row per run; quartiles follow from the values |
+
+```csv
+run,path,group:config.data.dataset,run.best.val/auc
+baseline,/mnt/proj/traceml/runs/20260929-105832_baseline_d710,cifar10,0.895
+high-lr,/mnt/proj/traceml/runs/20260929-111332_high-lr_ad4a,cifar10,0.888
+```
+
 ## Security and resource use
 
 What the extension can and cannot do:
 
-- **Read-only for your data.** TraceML never creates, modifies, renames or deletes anything in your runs. *Delete* only hides a run in TraceML; its folder stays as it is. The only files TraceML writes are in its cache folder (`traceml.cacheDir`, default `traceml/.cache`): `ui-state.json`, `runs-index.json`, `hidden-runs.json`, the CSV exports in `exports/` (newest 20 kept) and the PNG plots in `plots/` (newest 50 kept). File names are fixed or generated from a strict pattern, and pruning only removes files matching that pattern.
-  - The run index and the deleted-runs list are validated field by field when they're read back, and they never decide where TraceML reads: run folders always come from listing the configured runs folders, with the usual symlink checks. Saved plots are checked to be PNG images before they're written.
+- **Read-only for your data.** TraceML never creates, modifies, renames or deletes anything in your runs. *Delete* only hides a run in TraceML; its folder stays as it is. The only files TraceML writes are in its cache folder (`traceml.cacheDir`, default `traceml/.cache`): `ui-state.json`, `runs.sqlite` (written to a temp file, then renamed), `runs-index.json` (only when SQLite is unavailable), `hidden-runs.json`, the CSV exports in `exports/` (newest 20 kept) and the PNG plots and plot data CSVs in `plots/` (newest 50 of each kept). File names are fixed or generated from a strict pattern, and pruning only removes files matching that pattern.
+  - The run database, the run index and the deleted-runs list are validated field by field when they're read back, and they never decide where TraceML reads: run folders always come from listing the configured runs folders, with the usual symlink checks. Saved plots are checked to be PNG images before they're written.
   - Outside the cache module, the extension source uses only `stat`, `readdir`, `realpath`, `readFile` and `open(…, 'r')`. A test suite (`test/security.test.ts`) fails the build if a write, process or network API is added anywhere else. It also checks that the cache module writes only fixed file names inside the cache folder.
   - Files opened from the UI (*Files* in the inspector) are shown through a read-only `traceml-readonly:` file system, so they can't be edited or saved through TraceML.
 - **Confined to your runs folders.** TraceML reads only inside the folders listed in `traceml.roots`, and it doesn't search the rest of the workspace.
@@ -750,7 +794,7 @@ What the extension can and cannot do:
   - Polling only runs while the TraceML panel is open **and visible**. Nothing is read when it's closed or in a background tab; it refreshes as soon as you switch back. The default is every 5 s. Finished runs are only re-checked on *Refresh*.
   - Each poll reads each configured runs folder once, plus the core files of the running runs in it. Unchanged files are skipped by modification time and size. On startup the run index avoids re-parsing unchanged runs.
   - On slow network filesystems (e.g. NFS on a cluster), raise `traceml.refreshIntervalSeconds` and narrow `traceml.roots`.
-- **Dependencies:** at runtime only `yaml` and `uplot`, bundled into `dist/`. `npm audit` reports 0 known vulnerabilities.
+- **Dependencies:** at runtime only `yaml`, `uplot` and `sql.js` (SQLite compiled to WebAssembly; its `.wasm` is loaded from the extension's own `dist/` folder as bytes, never fetched), bundled into `dist/`. `npm audit` reports 0 known vulnerabilities.
 - **CPU:** the extension host runs JavaScript on a single thread, so parsing never uses more than one CPU core. A thread limit wouldn't change anything. Big files are read in 8 MB chunks, and `traceml.maxMetricsFileMB` caps the total per run.
 - **Supply chain:** a `.vsix` runs with the same permissions as VS Code itself, like any extension. Share it from a trusted place (e.g. your team's repository or releases). Before publishing to the Marketplace, set a real `publisher` and `repository` in `package.json`.
 - **Dev-only scripts** (`scripts/`, not included in the `.vsix`): `fake_runs.py --clean` deletes its output directory. It refuses when that directory contains anything that isn't a run.
@@ -834,9 +878,10 @@ src/discovery.ts        resolves the configured runs folders and lists the runs 
 src/fsGuard.ts          read confinement (realpath + inside-folder checks)
 src/readonlyFs.ts       read-only file system used to open run files
 src/runStore.ts         parsed-run cache (mtime/size), summaries, on-demand histories and details
-src/runIndex.ts         persistent run index: (de)serialization + field-by-field validation
+src/runIndex.ts         run state (de)serialization + field-by-field validation (runs-index.json fallback)
+src/runDb.ts            run database (runs.sqlite via sql.js): schema, incremental updates, load
 src/cacheStore.ts       the only writer: ui-state, run index, deleted runs, CSV exports, PNG plots
-src/model/tableExport.ts, png.ts, hiddenRuns.ts   CSV export, PNG DPI stamping, deleted-runs list
+src/model/tableExport.ts, plotData.ts, png.ts, hiddenRuns.ts   table/chart CSV, PNG DPI stamping, deleted runs
 src/poller.ts           non-overlapping interval poller
 src/protocol.ts         typed host <-> webview messages + validation of webview input
 src/types.ts, paths.ts  shared types; OS-independent path/glob helpers
@@ -857,7 +902,7 @@ scripts/fake_runs.py    fake run generator; scripts/traceml_logger.py reference 
 ## Architecture decisions
 
 - **No server.** There's no HTTP server, no localhost port and no background process. The UI is a VS Code webview.
-- **No database.** Parsed state is an in-memory cache rebuilt from the files. `traceml/.cache/runs-index.json` is a plain JSON copy of that cache (with each file's mtime and size), used only to start faster.
+- **No database server.** Parsed state is an in-memory cache rebuilt from the files. `traceml/.cache/runs.sqlite` is an SQLite file copy of that cache (with each file's mtime and size), used to start faster and for SQL queries. The run folders stay the source of truth; the file can be deleted at any time.
 - **Filesystem only.** The run directories are the single source of truth.
 - **The webview is embedded in VS Code** and is a pure view. It can't touch the filesystem. It asks the host for data through a typed message protocol (`src/protocol.ts`), and the host validates every incoming message. File opening only accepts a known run plus a fixed list of file names, so the webview never has arbitrary filesystem access.
 - **The extension host owns all filesystem access and parsing.** With `extensionKind: ["workspace"]`, that happens on the Remote-SSH host.

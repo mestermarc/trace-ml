@@ -108,6 +108,15 @@ window.acquireVsCodeApi = () => ({
         send({ type: 'runsPatch', upserts: DATA.runs.filter((r) => msg.runKeys.includes(r.key)), removed: [], refreshedAt: Date.now() });
         break;
       }
+      case 'savePlotData':
+        window.__lastCsv = msg.csv;
+        send({ type: 'plotDataSaved', path: '/home/me/proj/traceml/.cache/plots/plot-' + msg.title.toLowerCase().replace(/[^a-z0-9_-]+/g, '-') + '.csv', rows: msg.csv.trimEnd().split('\\n').length - 1 });
+        break;
+      case 'saveLineData':
+        // Preview only: the real host writes the full metrics.jsonl history.
+        window.__lastLine = msg;
+        send({ type: 'plotDataSaved', path: '/home/me/proj/traceml/.cache/plots/plot-' + msg.metric.replace(/[^a-z0-9_-]+/gi, '-') + '.csv', rows: 0 });
+        break;
       case 'savePlot': {
         // Preview only: keep the PNG so it can be inspected (window.__lastPng), report its pixel size.
         window.__lastPng = msg.data;

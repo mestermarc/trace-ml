@@ -2,6 +2,7 @@
 !dist/extension.js
 !dist/webview.js
 !dist/webview.css
+!dist/sql-wasm.wasm
 !media/curly_m.svg
 !media/activity.svg
 !media/extension_logo.png
