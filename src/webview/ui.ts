@@ -142,26 +142,31 @@ export function emptyState(opts: { icon?: string; title: string; text?: string; 
 // Popovers / menus
 // ---------------------------------------------------------------------------
 
-let openPop: { el: HTMLElement; anchor: HTMLElement; close: () => void } | null = null;
+/** Open popovers, outermost first. A popover opened from inside another one is nested in it. */
+const popStack: { el: HTMLElement; anchor: HTMLElement; close: () => void }[] = [];
 
+/** Closes the innermost open popover. */
 export function closePopover(): void {
-  openPop?.close();
+  popStack[popStack.length - 1]?.close();
 }
 
 export function isPopoverOpenFor(anchor: HTMLElement): boolean {
-  return openPop?.anchor === anchor;
+  return popStack.some((p) => p.anchor === anchor);
 }
 
 /**
- * Opens a floating panel under `anchor`. Only one popover is open at a time; it closes on
- * outside click, Escape, or when the same anchor is clicked again.
+ * Opens a floating panel under `anchor`. It closes on outside click, Escape, or when the same
+ * anchor is clicked again. Opening another popover closes the open ones, except the popovers that
+ * contain its anchor: a picker inside a panel opens on top of it (e.g. the Field list inside
+ * Filter), and Escape / an outside click close the innermost one first.
  */
 export function openPopover(anchor: HTMLElement, content: HTMLElement, opts: { align?: 'left' | 'right'; width?: number; label?: string; onClose?: () => void } = {}): () => void {
-  if (openPop?.anchor === anchor) {
-    openPop.close();
+  const same = popStack.find((p) => p.anchor === anchor);
+  if (same) {
+    same.close();
     return () => {};
   }
-  openPop?.close();
+  for (const p of [...popStack].reverse()) if (!p.el.contains(anchor)) p.close();
   const el = h('div', { class: 'popover', role: 'dialog', 'aria-label': opts.label ?? '' }, content);
   if (opts.width) el.style.width = `${opts.width}px`;
   document.body.append(el);
@@ -177,29 +182,36 @@ export function openPopover(anchor: HTMLElement, content: HTMLElement, opts: { a
   };
   place();
   anchor.setAttribute('aria-expanded', 'true');
+  const children = () => popStack.slice(popStack.findIndex((p) => p.el === el) + 1);
   const onDoc = (e: MouseEvent) => {
     const t = e.target as Node;
-    if (!el.contains(t) && !anchor.contains(t) && t.isConnected) close();
+    if (!t.isConnected || el.contains(t) || anchor.contains(t) || children().some((p) => p.el.contains(t))) return;
+    close();
   };
   const onKey = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      close();
-      anchor.focus();
-    }
+    if (e.key !== 'Escape' || popStack[popStack.length - 1]?.el !== el) return;
+    e.stopPropagation();
+    close();
+    anchor.focus();
   };
+  let closed = false;
   const close = () => {
+    if (closed) return;
+    closed = true;
+    for (const c of children().reverse()) c.close();
     el.remove();
     anchor.setAttribute('aria-expanded', 'false');
     document.removeEventListener('mousedown', onDoc, true);
     document.removeEventListener('keydown', onKey, true);
     window.removeEventListener('resize', place);
-    if (openPop?.el === el) openPop = null;
+    const i = popStack.findIndex((p) => p.el === el);
+    if (i >= 0) popStack.splice(i, 1);
     opts.onClose?.();
   };
   document.addEventListener('mousedown', onDoc, true);
   document.addEventListener('keydown', onKey, true);
   window.addEventListener('resize', place);
-  openPop = { el, anchor, close };
+  popStack.push({ el, anchor, close });
   // focus the first control for keyboard users
   el.querySelector<HTMLElement>('input, select, button')?.focus();
   return close;
@@ -248,4 +260,130 @@ export function menu(items: (MenuItem | 'separator' | { header: string })[]): HT
     e.preventDefault();
   });
   return el;
+}
+
+// ---------------------------------------------------------------------------
+// Searchable option picker
+// ---------------------------------------------------------------------------
+
+export interface PickItem {
+  value: string;
+  label: string;
+  /** Section header (e.g. "Config", "Run · best value"); items keep their order within a section. */
+  section?: string;
+  /** Extra text that is searched but not shown (e.g. the full column id). */
+  keywords?: string;
+}
+
+/** Case-insensitive match of every whitespace-separated term; returns null or the first term's range. */
+export function matchItem(item: PickItem, query: string): { start: number; end: number } | null | false {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return null;
+  const hay = `${item.label} ${item.section ?? ''} ${item.keywords ?? ''}`.toLowerCase();
+  if (!terms.every((t) => hay.includes(t))) return false;
+  const i = item.label.toLowerCase().indexOf(terms[0]!);
+  return i >= 0 ? { start: i, end: i + terms[0]!.length } : null;
+}
+
+/**
+ * A search box over a sectioned list: typing filters the options as you go (any part of the name,
+ * several words narrow down), ↑/↓ move, Enter picks, Esc closes the surrounding popover.
+ */
+export function searchList(items: readonly PickItem[], current: string | null, onPick: (value: string) => void, placeholder = 'Type to search…'): HTMLElement {
+  const input = h('input', { type: 'search', class: 'pick-search', placeholder, 'aria-label': placeholder, spellcheck: 'false', autocomplete: 'off' });
+  const list = h('div', { class: 'pick-list', role: 'listbox' });
+  const empty = h('div', { class: 'pick-empty muted' }, 'No matching option');
+  let shown: { item: PickItem; el: HTMLElement }[] = [];
+  let active = 0;
+
+  const setActive = (i: number, scroll = true) => {
+    active = Math.max(0, Math.min(shown.length - 1, i));
+    shown.forEach((s, j) => s.el.classList.toggle('active', j === active));
+    if (scroll) shown[active]?.el.scrollIntoView({ block: 'nearest' });
+  };
+  const render = () => {
+    const q = input.value;
+    shown = [];
+    const nodes: HTMLElement[] = [];
+    let section: string | undefined;
+    for (const item of items) {
+      const m = matchItem(item, q);
+      if (m === false) continue;
+      if (item.section && item.section !== section) {
+        section = item.section;
+        nodes.push(h('div', { class: 'menu-header' }, section));
+      }
+      const label = m ? h('span', {}, item.label.slice(0, m.start), h('mark', {}, item.label.slice(m.start, m.end)), item.label.slice(m.end)) : h('span', {}, item.label);
+      const el = h('button', { type: 'button', class: `menu-item pick-item${item.value === current ? ' checked' : ''}`, role: 'option', 'aria-selected': String(item.value === current), title: item.label },
+        h('span', { class: 'menu-check' }, item.value === current ? icon('check', 14) : ''), h('span', { class: 'menu-label' }, label));
+      el.addEventListener('click', () => onPick(item.value));
+      el.addEventListener('mousemove', () => setActive(shown.findIndex((s) => s.el === el), false));
+      shown.push({ item, el });
+      nodes.push(el);
+    }
+    list.replaceChildren(...nodes);
+    empty.hidden = shown.length > 0;
+    const cur = shown.findIndex((s) => s.item.value === current);
+    setActive(q.trim() ? 0 : Math.max(0, cur), true);
+  };
+  input.addEventListener('input', render);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') setActive(active + 1);
+    else if (e.key === 'ArrowUp') setActive(active - 1);
+    else if (e.key === 'Enter') {
+      const s = shown[active];
+      if (s) onPick(s.item.value);
+    } else return;
+    e.preventDefault();
+  });
+  render();
+  return h('div', { class: 'pick' }, input, list, empty);
+}
+
+/**
+ * Drop-in for a <select> with many options: a button showing the current choice that opens a
+ * searchable list. `value` / `change` behave like a select's.
+ */
+export function searchSelect(opts: { items: readonly PickItem[]; value: string; ariaLabel: string; onChange?: (value: string) => void; width?: number; placeholder?: string }): HTMLButtonElement & { value: string } {
+  const labelOf = (v: string) => opts.items.find((i) => i.value === v)?.label ?? (v || '—');
+  const text = h('span', { class: 'select-like-label' });
+  const b = h('button', { type: 'button', class: 'select-like', 'aria-label': opts.ariaLabel, 'aria-haspopup': 'listbox' }, text, icon('chevronDown', 13)) as HTMLButtonElement & { value: string };
+  let value = opts.value;
+  const show = () => {
+    text.textContent = labelOf(value);
+    b.title = `${opts.ariaLabel}: ${labelOf(value)}\nClick and type to search`;
+  };
+  Object.defineProperty(b, 'value', {
+    get: () => value,
+    set: (v: string) => {
+      value = v;
+      show();
+    },
+  });
+  show();
+  b.addEventListener('click', () => {
+    let close = () => {};
+    const pick = (v: string) => {
+      close();
+      b.focus();
+      if (v === value) return;
+      value = v;
+      show();
+      opts.onChange?.(v);
+      b.dispatchEvent(new Event('change'));
+    };
+    close = openPopover(b, h('div', { class: 'pop-body pick-pop' }, searchList(opts.items, value, pick, opts.placeholder)), { width: opts.width ?? Math.max(260, b.offsetWidth), label: opts.ariaLabel });
+  });
+  // typing on the closed picker opens it with that text already in the search box
+  b.addEventListener('keydown', (e) => {
+    if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
+    e.preventDefault();
+    b.click();
+    const s = document.querySelector<HTMLInputElement>('.pick-pop .pick-search');
+    if (s) {
+      s.value = e.key;
+      s.dispatchEvent(new Event('input'));
+    }
+  });
+  return b;
 }

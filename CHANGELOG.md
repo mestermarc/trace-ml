@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1
+
+- **Run list in the activity bar.** The TraceML view, empty until now, lists the runs by status (running, stale and failed first) with their key metric and age; the title shows the counts. Click a run to open it in the panel's inspector; right-click to copy its folder path or open its log / `metrics.jsonl` read-only. TraceML now polls while the panel or this view is visible.
+- **Resizable table columns.** Drag a header's right edge; double-click it for the automatic width. Widths are remembered.
+- **Searchable pickers.** Group, the Filter field and the chart field pickers (X, Y, Size, Color, Value, Group) filter their options as you type, with matches highlighted and keyboard selection. A picker opened inside the Filter panel no longer closes it.
+- **Fix: "Colour by group" showed a stray box / check mark.** A disabled switch revealed its hidden checkbox (a CSS specificity issue); the switch also shows *off* now when there is no grouping to colour by.
+- New `media/curly_m.svg` logo.
+
 ## 0.1.18
 
 - **Run database: `traceml/.cache/runs.sqlite`.** A small SQLite file (sql.js, WebAssembly, nothing to install) replaces `runs-index.json`: the table still fills instantly on open, only changed runs are rewritten, and you or an agent can query runs, config and metrics with SQL. A 0.1.17 `runs-index.json` is migrated automatically; if SQLite can't load, TraceML falls back to it.

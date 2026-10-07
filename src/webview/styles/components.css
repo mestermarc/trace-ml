@@ -263,6 +263,7 @@ label.check > span {
 
 /* switch */
 .switch {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: var(--tm-space-2);
@@ -273,11 +274,29 @@ label.check > span {
   user-select: none;
 }
 
-.switch-input {
+/*
+ * The real checkbox of a switch stays invisible in every state. The selector must outrank the
+ * generic `input[type='checkbox']` rules (incl. :disabled / :checked::after); otherwise a disabled
+ * switch (e.g. "Colour by group" without grouping) showed the 14px checkbox, with its check mark,
+ * through the switch.
+ */
+input[type='checkbox'].switch-input,
+input[type='checkbox'].switch-input:disabled,
+input[type='checkbox'].switch-input:checked {
   position: absolute;
+  inset: 0 auto auto 0;
   opacity: 0;
   width: 1px;
   height: 1px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  pointer-events: none;
+}
+
+input[type='checkbox'].switch-input::after {
+  content: none;
 }
 
 .switch-track {
@@ -2291,4 +2310,122 @@ tr.cmp-section th {
 .cond-add select.cond-op {
   flex: none;
   width: 116px;
+}
+
+/* column resizing: a grab strip on the right edge of each header */
+.th-row .th {
+  position: relative;
+}
+
+.col-resize {
+  position: absolute;
+  top: 6px;
+  right: 0;
+  bottom: 6px;
+  width: 7px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.col-resize::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 3px;
+  width: 1px;
+  background: var(--tm-border);
+  opacity: 0;
+  transition: opacity var(--tm-transition);
+}
+
+.th-row:hover .col-resize::after {
+  opacity: 1;
+}
+
+.col-resize:hover::after,
+.th.resizing .col-resize::after {
+  opacity: 1;
+  width: 2px;
+  right: 2px;
+  background: var(--tm-accent);
+}
+
+/* searchable option picker (Group, filter field, chart fields) */
+.select-like {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tm-space-2);
+  height: 28px;
+  max-width: 240px;
+  padding: 0 var(--tm-space-2);
+  border: 1px solid var(--tm-border);
+  border-radius: var(--tm-radius-md);
+  background: var(--tm-surface-raised);
+  color: var(--tm-text);
+  font: inherit;
+  font-size: var(--tm-fs-sm);
+  cursor: pointer;
+  transition: border-color var(--tm-transition);
+}
+
+.select-like:hover {
+  border-color: var(--tm-border-strong);
+}
+
+.select-like:focus-visible,
+.select-like[aria-expanded='true'] {
+  border-color: var(--tm-accent);
+  box-shadow: var(--tm-focus);
+  outline: none;
+}
+
+.select-like-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.select-like > .icon {
+  flex: none;
+  color: var(--tm-text-muted);
+}
+
+.pick-pop {
+  padding: var(--tm-space-2);
+}
+
+.pick-search {
+  width: 100%;
+  margin-bottom: var(--tm-space-1);
+}
+
+.pick-list {
+  display: flex;
+  flex-direction: column;
+  max-height: min(360px, 55vh);
+  overflow: auto;
+}
+
+.pick-item.active {
+  background: var(--tm-surface-hover);
+}
+
+.pick-item mark {
+  background: transparent;
+  color: var(--tm-accent);
+  font-weight: 600;
+}
+
+.pick-empty {
+  padding: var(--tm-space-2);
+  font-size: var(--tm-fs-sm);
+}
+
+.cond-add .select-like {
+  width: 170px;
+  flex: none;
 }

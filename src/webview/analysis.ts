@@ -6,11 +6,11 @@ import { barData, boxData, logTicks, niceTicks, NONE_GROUP, scatterData, type Ba
 import { barCsv, boxCsv, scatterCsv } from '../model/plotData';
 import { parseColumnId } from '../model/run';
 import { cssVar, formatDuration, formatNumber, formatTime, h, palette, withAlpha } from './dom';
-import { fieldOptions } from './filters';
+import { fieldItems } from './filters';
 import { composePng, legendFromDom, rasterizeSvg } from './pngExport';
 import type { Plots } from './plots';
 import type { AppState, Area } from './state';
-import { button, emptyState, icon, toggle } from './ui';
+import { button, emptyState, icon, searchSelect, toggle, type PickItem } from './ui';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const CHART_H = 360;
@@ -244,37 +244,40 @@ export class Analysis {
       sel.addEventListener('change', () => onChange(sel.value));
       return h('label', { class: 'field', title }, h('span', { class: 'field-label' }, label), sel);
     };
+    // Field choices can be long (every config key and metric): searchable pickers.
+    const pick = (label: string, items: PickItem[], value: string, onChange: (v: string) => void, title = '') =>
+      h('div', { class: 'field', title }, h('span', { class: 'field-label' }, label), searchSelect({ items, value, ariaLabel: label, onChange, placeholder: `Search ${label.toLowerCase()} fields…` }));
     const set = (patch: Partial<AppState['s']['analysis']>) => {
       Object.assign(this.st.s.analysis, patch);
       this.st.changed('plots');
     };
     const setBar = (patch: Partial<AppState['s']['analysis']['bar']>) => set({ bar: { ...a.bar, ...patch } });
     const autoLabel = `auto (${this.st.s.groupBy ? this.st.fieldLabel(this.st.s.groupBy) : 'table grouping: none'})`;
-    const groupOpts = (current: string | null) => [h('option', { value: 'auto' }, autoLabel), ...fieldOptions(groups, current, 'none')];
+    const groupOpts = (): PickItem[] => [{ value: 'auto', label: autoLabel }, ...fieldItems(groups, 'none')];
     const opt = (value: string, label: string) => h('option', { value }, label);
 
     if (c.kind === 'scatter') {
       c.controls.replaceChildren(
-        select('X', fieldOptions(numeric, r.x), r.x ?? '', (v) => set({ x: v })),
+        pick('X', fieldItems(numeric), r.x ?? '', (v) => set({ x: v })),
         button({ icon: 'refresh', title: 'Swap X and Y', variant: 'ghost', onClick: () => set({ x: r.y, y: r.x }) }),
-        select('Y', fieldOptions(numeric, r.y), r.y ?? '', (v) => set({ y: v })),
-        select('Size', fieldOptions(numeric, r.size, 'none'), r.size ?? '', (v) => set({ size: v || null })),
-        select('Color', groupOpts(a.color), a.color ?? '', (v) => set({ color: v || null }), 'Colour points by a categorical field'),
+        pick('Y', fieldItems(numeric), r.y ?? '', (v) => set({ y: v })),
+        pick('Size', fieldItems(numeric, 'none'), r.size ?? '', (v) => set({ size: v || null })),
+        pick('Color', groupOpts(), a.color ?? '', (v) => set({ color: v || null }), 'Colour points by a categorical field'),
         toggle('Log X', a.logX, (v) => set({ logX: v })),
         toggle('Log Y', a.logY, (v) => set({ logY: v })),
       );
     } else if (c.kind === 'box') {
       c.controls.replaceChildren(
-        select('Value', fieldOptions(numeric, r.boxField), r.boxField ?? '', (v) => set({ boxField: v })),
-        select('Group', groupOpts(a.boxGroup), a.boxGroup ?? '', (v) => set({ boxGroup: v || null }), 'One box per value of this field'),
+        pick('Value', fieldItems(numeric), r.boxField ?? '', (v) => set({ boxField: v })),
+        pick('Group', groupOpts(), a.boxGroup ?? '', (v) => set({ boxGroup: v || null }), 'One box per value of this field'),
         toggle('Log Y', a.boxLogY, (v) => set({ boxLogY: v })),
       );
     } else {
       const modeSel = select('Bars', [opt('runs', 'one per run'), opt('groups', 'group mean (min–max)')], a.bar.mode, (v) => setBar({ mode: v as 'runs' | 'groups' }));
       c.controls.replaceChildren(
-        select('Value', fieldOptions(numeric, r.barField), r.barField ?? '', (v) => setBar({ field: v })),
+        pick('Value', fieldItems(numeric), r.barField ?? '', (v) => setBar({ field: v })),
         modeSel,
-        select('Group', groupOpts(a.bar.group), a.bar.group ?? '', (v) => setBar({ group: v || null }), 'Colour (per run) or aggregate (group mean) by this field'),
+        pick('Group', groupOpts(), a.bar.group ?? '', (v) => setBar({ group: v || null }), 'Colour (per run) or aggregate (group mean) by this field'),
         select('Sort', [opt('desc', 'highest first'), opt('asc', 'lowest first'), opt('table', 'table order')], a.bar.sort, (v) => setBar({ sort: v as 'desc' | 'asc' | 'table' })),
         toggle('Start at zero', a.bar.zero, (v) => setBar({ zero: v }), 'Bars start at 0 (off: the axis fits the data range)'),
       );

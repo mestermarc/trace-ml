@@ -2,7 +2,7 @@
   "name": "traceml",
   "displayName": "TraceML",
   "description": "Read-only, filesystem-only viewer for ML training runs (tables, plots, comparison) inside VS Code. Works over Remote-SSH.",
-  "version": "0.1.18",
+  "version": "0.2.1",
   "publisher": "mestermarc",
   "license": "MIT",
   "repository": {
@@ -38,11 +38,33 @@
       {
         "command": "traceml.showExperiments",
         "title": "Show Experiments",
-        "category": "TraceML"
+        "category": "TraceML",
+        "icon": "$(graph)"
       },
       {
         "command": "traceml.refresh",
         "title": "Refresh",
+        "category": "TraceML",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "traceml.revealRun",
+        "title": "Show Run Details",
+        "category": "TraceML"
+      },
+      {
+        "command": "traceml.copyRunPath",
+        "title": "Copy Run Folder Path",
+        "category": "TraceML"
+      },
+      {
+        "command": "traceml.openRunLog",
+        "title": "Open Log (read-only)",
+        "category": "TraceML"
+      },
+      {
+        "command": "traceml.openRunMetrics",
+        "title": "Open metrics.jsonl (read-only)",
         "category": "TraceML"
       }
     ],
@@ -113,7 +135,56 @@
         "view": "traceml.home",
         "contents": "Browse the ML training runs of this workspace.\n[Open Experiments](command:traceml.showExperiments)\n[Refresh](command:traceml.refresh)\nRuns are read from ./traceml/runs by default. Change the folder with the [traceml.roots](command:workbench.action.openSettings?%5B%22traceml.roots%22%5D) setting."
       }
-    ]
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "traceml.refresh",
+          "when": "view == traceml.home",
+          "group": "navigation@1"
+        },
+        {
+          "command": "traceml.showExperiments",
+          "when": "view == traceml.home",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "traceml.copyRunPath",
+          "when": "view == traceml.home && viewItem == traceml.run",
+          "group": "1_copy@1"
+        },
+        {
+          "command": "traceml.openRunLog",
+          "when": "view == traceml.home && viewItem == traceml.run",
+          "group": "2_open@1"
+        },
+        {
+          "command": "traceml.openRunMetrics",
+          "when": "view == traceml.home && viewItem == traceml.run",
+          "group": "2_open@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "traceml.revealRun",
+          "when": "false"
+        },
+        {
+          "command": "traceml.copyRunPath",
+          "when": "false"
+        },
+        {
+          "command": "traceml.openRunLog",
+          "when": "false"
+        },
+        {
+          "command": "traceml.openRunMetrics",
+          "when": "false"
+        }
+      ]
+    }
   },
   "scripts": {
     "build": "node esbuild.mjs",

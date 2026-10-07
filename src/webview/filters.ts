@@ -5,7 +5,7 @@ import type { ColumnDef } from '../model/run';
 import { DISPLAY_STATUSES, type DisplayStatus } from '../types';
 import { h } from './dom';
 import { MAX_ROWS_LIMIT, parseMaxRows, type AppState, type Area } from './state';
-import { button, chip, icon, menu, openPopover, toggle } from './ui';
+import { button, chip, icon, menu, openPopover, searchList, searchSelect, toggle, type PickItem } from './ui';
 
 /**
  * Section titles of the column kinds. Logged values form three groups: Config (params.yaml), Run
@@ -71,17 +71,10 @@ export function openHiddenRuns(st: AppState, anchor: HTMLElement): void {
   openPopover(anchor, body, { width: 380, align: 'right', label: 'Deleted runs' });
 }
 
-/** <option>s for a field picker, grouped by column kind. `noneLabel` adds an empty choice. */
-export function fieldOptions(fields: readonly ColumnDef[], current: string | null, noneLabel?: string): HTMLElement[] {
-  const out: HTMLElement[] = [];
-  if (noneLabel) out.push(h('option', { value: '' }, noneLabel));
-  const groups = new Map<string, ColumnDef[]>();
-  for (const f of fields) groups.set(KIND_TITLES[f.kind], [...(groups.get(KIND_TITLES[f.kind]) ?? []), f]);
-  for (const [title, cols] of groups) {
-    const og = h('optgroup', { label: title });
-    for (const c of cols) og.append(h('option', { value: c.id, selected: c.id === current }, columnLabel(c)));
-    out.push(og);
-  }
+/** Items for a searchable field picker, in sections by column kind. `noneLabel` adds an empty choice first. */
+export function fieldItems(fields: readonly ColumnDef[], noneLabel?: string): PickItem[] {
+  const out: PickItem[] = noneLabel ? [{ value: '', label: noneLabel }] : [];
+  for (const f of fields) out.push({ value: f.id, label: columnLabel(f), section: KIND_TITLES[f.kind], keywords: f.id });
   return out;
 }
 
@@ -371,7 +364,7 @@ export class Toolbar {
     const render = () => {
       const conds = Object.entries(f.columns).filter(([id, v]) => v.trim() && id !== 'location');
       // Builder: field -> operator -> value (with suggestions from the runs' own values).
-      const colSel = h('select', { 'aria-label': 'Field' }, ...fieldOptions(cols, this.filterField));
+      const colSel = searchSelect({ items: fieldItems(cols), value: this.filterField && cols.some((c) => c.id === this.filterField) ? this.filterField : (cols[0]?.id ?? ''), ariaLabel: 'Field', width: 300, placeholder: 'Search fields…' });
       const opSel = h('select', { 'aria-label': 'Operator', class: 'cond-op' });
       const suggest = h('datalist', { id: 'traceml-filter-values' });
       const expr = h('input', { type: 'text', list: 'traceml-filter-values', 'aria-label': 'Value', spellcheck: 'false', autocomplete: 'off' });
@@ -454,19 +447,15 @@ export class Toolbar {
 
   private openGroup(): void {
     const cur = this.st.s.groupBy;
-    const set = (v: string | null) => {
-      this.st.s.groupBy = v;
+    let close = () => {};
+    const set = (v: string) => {
+      close();
+      this.st.s.groupBy = v || null;
       this.st.s.collapsedGroups = [];
       this.st.changed('table', 'plots', 'toolbar');
     };
-    const items: Parameters<typeof menu>[0] = [{ label: 'No grouping', checked: cur === null, onSelect: () => set(null) }, 'separator'];
-    const byKind = new Map<string, ColumnDef[]>();
-    for (const c of this.st.groupFields()) byKind.set(KIND_TITLES[c.kind], [...(byKind.get(KIND_TITLES[c.kind]) ?? []), c]);
-    for (const [title, cols] of byKind) {
-      items.push({ header: title });
-      for (const c of cols) items.push({ label: c.kind === 'param' ? c.key : columnLabel(c), checked: cur === c.id, onSelect: () => set(c.id) });
-    }
-    openPopover(this.groupBtn, h('div', { class: 'menu-scroll' }, menu(items)), { label: 'Group by', width: 260 });
+    const items: PickItem[] = [{ value: '', label: 'No grouping' }, ...fieldItems(this.st.groupFields()).map((i) => ({ ...i, label: i.label.replace(/^config /, '') }))];
+    close = openPopover(this.groupBtn, h('div', { class: 'pop-body pick-pop' }, searchList(items, cur ?? '', set, 'Search fields to group by…')), { label: 'Group by', width: 300 });
   }
 
   private openColumns(): void {

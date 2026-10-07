@@ -12,6 +12,10 @@ const OVERSCAN = 8;
 const WIDTHS: Record<string, number> = { status: 112, name: 250, group: 130, started: 132, ended: 132, heartbeat: 132, duration: 86, step: 64, epoch: 64, id: 280, tags: 130, location: 280 };
 const SELECT_W = 36;
 
+/** Limits for a column width set by dragging. */
+export const MIN_COL_W = 48;
+export const MAX_COL_W = 800;
+
 function widthOf(c: ColumnDef): number {
   return c.kind === 'fixed' ? (WIDTHS[c.key] ?? 110) : Math.min(190, Math.max(92, c.key.length * 7 + 40));
 }
@@ -59,6 +63,8 @@ export class RunTable {
   private emptyKey = '';
   /** Column being dragged in the header, and the column whose header should get focus after a move. */
   private dragCol: string | null = null;
+  /** Set while a column edge is dragged (suppresses sorting / moving on that gesture). */
+  private resizing = false;
   private refocusCol: string | null = null;
 
   constructor(private readonly st: AppState) {
@@ -83,8 +89,8 @@ export class RunTable {
     if (!(areas.has('runs') || areas.has('table') || areas.has('selection') || areas.has('nav'))) return;
     if (this.st.s.view !== 'runs') return;
     this.cols = this.st.visibleColumns();
-    this.template = [SELECT_W, ...this.cols.map(widthOf)].map((w) => `${w}px`).join(' ');
-    const key = JSON.stringify([this.cols.map((c) => c.id), this.st.s.sort, this.st.s.showFilterRow]);
+    this.template = this.gridTemplate();
+    const key = JSON.stringify([this.cols.map((c) => c.id), this.st.s.sort, this.st.s.showFilterRow, this.template]);
     if (key !== this.headKey) {
       this.headKey = key;
       this.renderHead();
@@ -101,8 +107,7 @@ export class RunTable {
   private renderHead(): void {
     const focusedCol = (document.activeElement as HTMLElement | null)?.dataset?.filterCol;
     const selStart = (document.activeElement as HTMLInputElement | null)?.selectionStart ?? null;
-    const totalW = SELECT_W + this.cols.reduce((a, c) => a + widthOf(c), 0);
-    this.head.style.minWidth = this.body.style.minWidth = `${totalW}px`;
+    this.applyTotalWidth();
 
     const selectAll = h('input', { type: 'checkbox', class: 'cb', title: 'Select / clear all filtered runs', 'aria-label': 'Select all filtered runs' });
     selectAll.addEventListener('change', () => {
@@ -138,10 +143,12 @@ export class RunTable {
       if (sortKey) sortEl.innerHTML = iconHtml(sortKey.dir === 'asc' ? 'arrowUp' : 'arrowDown', 12) + (this.st.s.sort.length > 1 ? `<sub>${sortIdx + 1}</sub>` : '');
       th.append(sortEl);
       th.addEventListener('click', (e) => {
+        if (this.resizing) return;
         this.st.s.sort = toggleSort(this.st.s.sort, c.id, (e as MouseEvent).shiftKey);
         this.st.changed('table');
       });
       this.wireColumnMove(th, c.id);
+      this.wireColumnResize(th, c);
       headRow.append(th);
 
       const input = h('input', {
@@ -190,6 +197,66 @@ export class RunTable {
     }
   }
 
+  private colWidth(c: ColumnDef): number {
+    return this.st.s.columnWidths[c.id] ?? widthOf(c);
+  }
+
+  private gridTemplate(): string {
+    return [SELECT_W, ...this.cols.map((c) => this.colWidth(c))].map((w) => `${w}px`).join(' ');
+  }
+
+  private applyTotalWidth(): void {
+    const totalW = SELECT_W + this.cols.reduce((a, c) => a + this.colWidth(c), 0);
+    this.head.style.minWidth = this.body.style.minWidth = `${totalW}px`;
+  }
+
+  /**
+   * Column resizing: drag the handle at the right edge of a header; double-click it to go back to
+   * the automatic width. Widths are remembered per column. While dragging, only the grid template
+   * of the rendered rows changes (no re-render).
+   */
+  private wireColumnResize(th: HTMLElement, c: ColumnDef): void {
+    const handle = h('span', { class: 'col-resize', title: 'Drag to resize · double-click for the automatic width', 'aria-hidden': 'true' });
+    th.append(handle);
+    handle.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.resizing = true;
+      handle.setPointerCapture(e.pointerId);
+      const startX = e.clientX;
+      const startW = this.colWidth(c);
+      th.classList.add('resizing');
+      const apply = () => {
+        this.template = this.gridTemplate();
+        this.applyTotalWidth();
+        for (const row of this.head.querySelectorAll<HTMLElement>('.tr')) row.style.gridTemplateColumns = this.template;
+        for (const { el } of this.rows.values()) if (el.style.gridTemplateColumns) el.style.gridTemplateColumns = this.template;
+      };
+      const move = (ev: PointerEvent) => {
+        this.st.s.columnWidths[c.id] = Math.round(Math.min(MAX_COL_W, Math.max(MIN_COL_W, startW + ev.clientX - startX)));
+        apply();
+      };
+      const up = () => {
+        handle.removeEventListener('pointermove', move);
+        th.classList.remove('resizing');
+        // the click that ends the drag must not sort the column
+        setTimeout(() => (this.resizing = false), 0);
+        this.st.changed('table');
+      };
+      handle.addEventListener('pointermove', move);
+      handle.addEventListener('pointerup', up, { once: true });
+      handle.addEventListener('pointercancel', up, { once: true });
+    });
+    handle.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      delete this.st.s.columnWidths[c.id];
+      this.st.changed('table');
+    });
+    handle.addEventListener('click', (e) => e.stopPropagation());
+  }
+
   /** Column reordering: drag a header onto another one, or Alt+Left / Alt+Right on a focused header. */
   private wireColumnMove(th: HTMLElement, id: string): void {
     const side = (e: DragEvent) => {
@@ -198,6 +265,10 @@ export class RunTable {
     };
     const unmark = () => this.head.querySelectorAll('.drop-before, .drop-after').forEach((el) => el.classList.remove('drop-before', 'drop-after'));
     th.addEventListener('dragstart', (e) => {
+      if (this.resizing) {
+        e.preventDefault();
+        return;
+      }
       this.dragCol = id;
       th.classList.add('dragging');
       if (e.dataTransfer) {

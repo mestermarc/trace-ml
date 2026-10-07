@@ -17,6 +17,8 @@ export type HostToWebview =
   | { type: 'hiddenRuns'; runs: HiddenRun[] }
   /** A plot was saved as PNG. */
   | { type: 'plotSaved'; path: string; width: number; height: number }
+  /** Show this run (from the activity-bar view): Runs view + inspector. */
+  | { type: 'focusRun'; runKey: string }
   /** A chart's data was saved as CSV. */
   | { type: 'plotDataSaved'; path: string; rows: number };
 

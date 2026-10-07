@@ -454,7 +454,8 @@ export class Plots {
       smoothingValue.textContent = p.smoothing.toFixed(2);
       this.st.changed('series');
     });
-    const colorBy = toggle('Colour by group', p.colorBy === 'group', (v) => {
+    // Shown on only while there is a grouping to colour by (the choice is kept for the next grouping).
+    const colorBy = toggle('Colour by group', p.colorBy === 'group' && !!this.st.s.groupBy, (v) => {
       p.colorBy = v ? 'group' : 'run';
       this.st.changed('plots');
     }, this.st.s.groupBy ? 'Colour lines by the table grouping' : 'Group the table (Group) to colour lines by group');

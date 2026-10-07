@@ -213,9 +213,20 @@ The packaged extension doesn't need Node, npm or any other process running.
 
 | Command | What it does |
 | --- | --- |
-| TraceML icon in the activity bar | Opens the TraceML sidebar, which has *Open Experiments* / *Refresh* links and also opens the panel. |
+| TraceML icon in the activity bar | Opens the **run list** in the sidebar (see below) and the TraceML panel. |
 | **TraceML: Show Experiments** | Opens the TraceML panel, or brings it to the front if it's already open. |
 | **TraceML: Refresh** | Re-lists the configured runs folders and re-reads changed files right away. |
+
+### The run list in the activity bar
+
+The TraceML view in the activity bar lists your runs by status, so you can see what's training and what crashed while you edit code:
+
+- **Running**, **Stale** and **Failed** come first and are expanded; **Completed**, **Killed** and **Unknown** are collapsed. Newest runs first.
+- Each run shows its key metric (first `best` value, else a numeric summary), the step while running, and its age (e.g. `val/auc 0.894 · step 12 · 2h`). Hover for id, group, tags and file problems.
+- The view title shows the counts, e.g. `24 runs · 1 running · 4 failed`.
+- **Click a run** to open it in the panel (Runs view, inspector, row scrolled into view). **Right-click** for *Copy Run Folder Path*, *Open Log* and *Open metrics.jsonl* (read-only). The title bar has *Refresh* and *Show Experiments*.
+- Runs deleted from TraceML aren't listed. The list uses the data TraceML already has (no extra file reads); TraceML polls while the panel **or** this view is visible.
+- With no runs yet, the view shows the *Open Experiments* / *Refresh* links and where runs are read from.
 
 ## Settings
 
@@ -259,12 +270,13 @@ TraceML uses a dark-only application shell with its own design system, inside a 
   - **Filter** opens a panel for adding column conditions: pick a **field**, an **operator** and a **value**.
     - Operators for numbers: `=`, `!=`, `>`, `>=`, `<`, `<=`, *between* (`0.1..0.5`), *contains*, *not contains*. For text: `=`, `!=`, *contains*, *not contains*, *regex*.
     - The value box **suggests values from your runs** (most frequent first), e.g. `adamw`, `sgd` for `optim.name`.
+    - Field pickers (Filter field, Group, and the X / Y / Size / Color / Value / Group pickers of the charts) are **searchable**: open one and type, or just start typing on it. Every word you type must match; matches are highlighted.
     - Text matching ignores case. Runs without a value for the field never match a condition.
     - The same panel can also show per-column filter inputs under the table headers. They suggest values too, and accept the operators typed directly: `> 0.8`, `0.1..0.5`, `= adamw`, `!= adamw`, `~ adam` (contains), `!~ adam` (not contains), `/regex/`, or plain text (contains). Filters saved by older versions keep working.
   - **Status segment:** *All* · Running · Stale · Completed · Failed · Killed · Unknown, with counts. You can combine several statuses.
   - **Differing params only:** shows only the config columns whose values differ between the filtered runs.
   - **Starting values:** adds each metric's starting value (its first logged, non-null value in `metrics.jsonl`) as `start` columns next to the metrics already shown. It also adds them to the Columns chooser, the scatter/box/bar fields, the inspector and the Compare view, so you can see whether runs started from the same point.
-  - **Group** groups by status, group, tags, name, any parameter, or a text summary field.
+  - **Group** groups by status, group, tags, name, any config value, or a text summary field. The list is searchable: type part of a name (e.g. `batch`) and pick with ↑/↓ and Enter.
     - Each group gets a collapsible header row showing its color, value, run count and how many runs are selected. The header's checkbox selects the whole group.
     - Groups are ordered by value, with `(none)` last. Sorting applies within each group.
   - **Max rows** (next to the run count) limits the table to the first N rows: pick 25, 50, **100** (the default), 250, 500, 1000 or All, or type any whole number from 1 to 1000. The limit is applied after filters and sorting, and the toolbar shows "showing N of M". Charts and *Select filtered* still use all filtered runs.
@@ -277,6 +289,7 @@ TraceML uses a dark-only application shell with its own design system, inside a 
     - By default the table shows the fixed columns, all `best` and `summary` metrics, and up to six config values that differ between the runs.
     - Click a header to sort; Shift-click adds a secondary sort key. Nulls always sort last.
     - **Move columns** by dragging a header left or right (a blue line marks where it lands), or with Alt+←/→ on a focused header. The order is remembered and used by *Export*.
+    - **Resize columns** by dragging the right edge of a header; double-click the edge to go back to the automatic width. Widths are remembered.
     - Status pills combine a dot and a label: running, completed, failed, killed, stale (with a hollow dot), and unknown.
     - An amber warning icon after a run name marks *file problems*, such as corrupt or missing files, malformed metric lines, or a newer schema. That's separate from a *failed* run status. Hover over it for details; they're also listed in the inspector.
     - Only the rows on screen exist in the DOM, and rows are reused across live refreshes. Drag the bottom edge to resize the table.

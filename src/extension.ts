@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import { listRuns, resolveRunsRoots, type DiscoveredRun, type RunsRoot } from './discovery';
 import { DEFAULT_CACHE_DIR, resolveCacheDirPath } from './cacheDir';
 import { CacheStore } from './cacheStore';
+import { RunsTreeProvider, runKeyOf } from './explorerView';
 import { parseHiddenRuns, serializeHiddenRuns, type HiddenRun } from './model/hiddenRuns';
 import { MAX_PNG_BYTES, isPng, pngSize, setPngDpi } from './model/png';
 import { lineCsv } from './model/plotData';
@@ -84,6 +85,11 @@ class TraceMLController implements vscode.Disposable {
   /** The run index and the hidden-runs list are read once, on the first scan. */
   private cacheLoaded = false;
   private indexTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Fired when the run list changes (feeds the activity-bar view). */
+  private readonly runsChanged = new vscode.EventEmitter<void>();
+  readonly onRunsChanged = this.runsChanged.event;
+  /** The activity-bar run list is visible: keep polling even when the panel is hidden. */
+  private treeVisible = false;
   /** The run database (runs.sqlite); null when sql.js could not be loaded (then runs-index.json is used). */
   private db: RunDb | null = null;
   /** Runs changed / removed since the database was last written; `dbAll` = write every run. */
@@ -155,16 +161,61 @@ class TraceMLController implements vscode.Disposable {
       panel.webview.onDidReceiveMessage((m) => void this.onMessage(m)),
       panel.onDidDispose(() => this.onPanelDisposed()),
       // Poll only while the panel is visible: a background tab causes no filesystem reads.
-      panel.onDidChangeViewState((e) => {
-        if (e.webviewPanel.visible) {
-          this.poller.start();
-        } else {
-          this.poller.stop();
-        }
-      }),
+      panel.onDidChangeViewState(() => this.updatePolling()),
     );
     this.forceNext = true;
-    if (panel.visible) this.poller.start();
+    this.updatePolling();
+  }
+
+  /**
+   * Polls while the panel or the activity-bar run list is visible; nothing is read when neither
+   * is shown.
+   */
+  private updatePolling(): void {
+    if (this.panel?.visible || this.treeVisible) this.poller.start();
+    else this.poller.stop();
+  }
+
+  /** The activity-bar run list was shown / hidden. */
+  setTreeVisible(visible: boolean): void {
+    this.treeVisible = visible;
+    this.updatePolling();
+  }
+
+  /** Current runs (for the activity-bar view). */
+  runs(): RunSummary[] {
+    return this.store.summaries();
+  }
+
+  /** Opens the panel on the Runs view with this run's inspector. */
+  revealRun(key: string): void {
+    this.show();
+    this.pendingReveal = key;
+    if (this.webviewReady) this.flushReveal();
+  }
+
+  private pendingReveal: string | null = null;
+
+  private flushReveal(): void {
+    if (!this.pendingReveal) return;
+    this.post({ type: 'focusRun', runKey: this.pendingReveal });
+    this.pendingReveal = null;
+  }
+
+  async copyRunPath(key: string): Promise<void> {
+    const dir = this.store.dirOf(key);
+    if (!dir) return;
+    await vscode.env.clipboard.writeText(dir);
+    vscode.window.setStatusBarMessage('TraceML: run folder path copied', 3000);
+  }
+
+  async openRunFileFromTree(key: string, file: 'logs/run.log' | 'metrics.jsonl'): Promise<void> {
+    const real = await this.store.resolveRunFile(key, file);
+    if (!real) {
+      void vscode.window.showInformationMessage(`TraceML: ${file} is not available in this run.`);
+      return;
+    }
+    await vscode.commands.executeCommand('vscode.open', this.readonlyFiles.uriFor(real), { preview: true });
   }
 
   refresh(): void {
@@ -181,8 +232,8 @@ class TraceMLController implements vscode.Disposable {
   }
 
   private onPanelDisposed(): void {
-    this.poller.stop();
     this.panel = undefined;
+    this.updatePolling();
     this.webviewReady = false;
     this.panelDisposables.forEach((d) => d.dispose());
     this.panelDisposables = [];
@@ -248,6 +299,7 @@ class TraceMLController implements vscode.Disposable {
     }
     const indexed = saved.filter((r) => !this.hidden.has(r.key) && this.roots.some((root) => isRunOf(root.dir, r.key)));
     this.store.seed(indexed);
+    this.runsChanged.fire();
     if (indexed.length) this.output.appendLine(`Loaded ${indexed.length} runs from ${this.db ? 'the run database' : 'the run index'}`);
     this.sendSnapshot();
   }
@@ -324,6 +376,8 @@ class TraceMLController implements vscode.Disposable {
     await this.saveHidden();
     this.output.appendLine(`Deleted ${added.length} run${added.length === 1 ? '' : 's'} from TraceML (folders not modified)`);
     this.post({ type: 'runsPatch', upserts: [], removed: added, refreshedAt: Date.now() });
+    this.store.forget(added);
+    this.runsChanged.fire();
     this.poller.trigger();
   }
 
@@ -375,6 +429,7 @@ class TraceMLController implements vscode.Disposable {
 
     const { upserts, removed } = await this.store.sync(discovered, { force });
     if (upserts.length || removed.length || force) this.scheduleIndexSave(upserts.map((u) => u.key), removed);
+    if (upserts.length || removed.length) this.runsChanged.fire();
     const byKey = new Map<string, RunSummary>(upserts.map((u) => [u.key, u]));
 
     // Advance metric histories of plotted runs only.
@@ -424,6 +479,7 @@ class TraceMLController implements vscode.Disposable {
           this.webviewReady = true;
           this.sent.clear();
           this.sendSnapshot();
+          this.flushReveal();
           this.refresh();
           break;
         case 'refreshNow':
@@ -626,6 +682,7 @@ class TraceMLController implements vscode.Disposable {
 
   dispose(): void {
     this.poller.stop();
+    this.runsChanged.dispose();
     if (this.indexTimer) clearTimeout(this.indexTimer);
     this.panel?.dispose();
     this.disposables.forEach((d) => d.dispose());
@@ -634,18 +691,47 @@ class TraceMLController implements vscode.Disposable {
 
 export function activate(ctx: vscode.ExtensionContext): void {
   const controller = new TraceMLController(ctx);
-  // Activity-bar entry: an (intentionally empty) view whose welcome content links to the panel.
-  // Opening the view also opens the experiments panel, so one click on the icon is enough.
-  const home = vscode.window.createTreeView('traceml.home', {
-    treeDataProvider: { getTreeItem: (e: vscode.TreeItem) => e, getChildren: () => [] },
-  });
+  // Activity-bar view: the runs by status (running / stale / failed first). Opening it also opens
+  // the experiments panel, so one click on the icon is enough; clicking a run shows its details.
+  const tree = new RunsTreeProvider(controller);
+  const home = vscode.window.createTreeView('traceml.home', { treeDataProvider: tree, showCollapseAll: true });
+  // Next to the view title: "24 runs · 1 running · 4 failed".
+  const updateMessage = () => {
+    const runs = controller.runs();
+    const count = (st: string) => runs.filter((r) => r.displayStatus === st).length;
+    home.description = runs.length ? [`${runs.length} run${runs.length === 1 ? '' : 's'}`, ...['running', 'stale', 'failed'].flatMap((st) => (count(st) ? [`${count(st)} ${st}`] : []))].join(' · ') : undefined;
+  };
   ctx.subscriptions.push(
     home,
+    controller.onRunsChanged(() => {
+      tree.refresh();
+      updateMessage();
+    }),
     home.onDidChangeVisibility((e) => {
+      controller.setTreeVisible(e.visible);
       if (e.visible) controller.show(true);
     }),
+    vscode.commands.registerCommand('traceml.revealRun', (arg: unknown) => {
+      const key = runKeyOf(arg);
+      if (key) controller.revealRun(key);
+    }),
+    vscode.commands.registerCommand('traceml.copyRunPath', (arg: unknown) => {
+      const key = runKeyOf(arg);
+      if (key) void controller.copyRunPath(key);
+    }),
+    vscode.commands.registerCommand('traceml.openRunLog', (arg: unknown) => {
+      const key = runKeyOf(arg);
+      if (key) void controller.openRunFileFromTree(key, 'logs/run.log');
+    }),
+    vscode.commands.registerCommand('traceml.openRunMetrics', (arg: unknown) => {
+      const key = runKeyOf(arg);
+      if (key) void controller.openRunFileFromTree(key, 'metrics.jsonl');
+    }),
   );
-  if (home.visible) controller.show(true);
+  if (home.visible) {
+    controller.setTreeVisible(true);
+    controller.show(true);
+  }
   ctx.subscriptions.push(
     controller,
     vscode.commands.registerCommand('traceml.showExperiments', () => controller.show()),

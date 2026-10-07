@@ -68,7 +68,17 @@ st.subscribe((areas: Set<Area>) => {
 
 document.getElementById('app')!.append(shell.el);
 
-window.addEventListener('message', (e: MessageEvent<HostToWebview>) => st.handle(e.data));
+window.addEventListener('message', (e: MessageEvent<HostToWebview>) => {
+  if (e.data?.type === 'focusRun') {
+    // from the activity-bar run list: open the run in the Runs view and scroll it into view
+    const key = e.data.runKey;
+    st.navigate('runs');
+    st.focus(key);
+    requestAnimationFrame(() => requestAnimationFrame(() => table.reveal(key)));
+    return;
+  }
+  st.handle(e.data);
+});
 st.post({ type: 'ready' });
 st.requestDetail();
 st.requestSeries();

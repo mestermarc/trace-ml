@@ -41,6 +41,8 @@ export interface PersistedState {
   maxRows: number | null;
   /** Show the starting value of each metric (first logged value) in the table, charts and comparison. */
   showFirst: boolean;
+  /** Column widths set by dragging a header edge (px, by column id); missing = automatic. */
+  columnWidths: Record<string, number>;
   plot: {
     metrics: string[] | null; // null = automatic defaults
     xMode: XMode;
@@ -99,6 +101,7 @@ const DEFAULT_STATE: PersistedState = {
   compareDiffOnly: false,
   maxRows: 100,
   showFirst: false,
+  columnWidths: {},
   plot: { metrics: null, xMode: 'step', logY: false, smoothing: 0, hidden: [], colorBy: 'run' },
   groupBy: null,
   collapsedGroups: [],

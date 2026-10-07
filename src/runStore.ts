@@ -202,6 +202,14 @@ export class RunStore {
     return out;
   }
 
+  /** Drops runs right away (e.g. deleted from TraceML), without waiting for the next sync. */
+  forget(keys: Iterable<string>): void {
+    for (const k of keys) {
+      this.entries.delete(k);
+      this.seeded.delete(k);
+    }
+  }
+
   has(key: string): boolean {
     return this.entries.has(key);
   }
