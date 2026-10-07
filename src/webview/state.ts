@@ -51,6 +51,8 @@ export interface PersistedState {
     hidden: string[];
     /** Line colours: stable per-run colour, or the colour of the run's group (when grouping). */
     colorBy: 'run' | 'group';
+    /** "Plot by groups": one mean curve per table group instead of one line per run. */
+    byGroups: boolean;
   };
   /** Table grouping field (column id), or null. */
   groupBy: string | null;
@@ -77,6 +79,9 @@ export interface PersistedState {
       /** Bars start at zero (honest lengths); off = axis fits the data range. */
       zero: boolean;
     };
+    /** "Plot by groups" for the scatter (one point per group at the mean) and box (mean markers). */
+    scatterByGroups: boolean;
+    boxMeans: boolean;
     /** Visualization sections the user collapsed ('line' | 'scatter' | 'box' | 'bar'). */
     collapsed: string[];
   };
@@ -102,7 +107,7 @@ const DEFAULT_STATE: PersistedState = {
   maxRows: 100,
   showFirst: false,
   columnWidths: {},
-  plot: { metrics: null, xMode: 'step', logY: false, smoothing: 0, hidden: [], colorBy: 'run' },
+  plot: { metrics: null, xMode: 'step', logY: false, smoothing: 0, hidden: [], colorBy: 'run', byGroups: false },
   groupBy: null,
   collapsedGroups: [],
   analysis: {
@@ -117,6 +122,8 @@ const DEFAULT_STATE: PersistedState = {
     logY: false,
     boxLogY: false,
     bar: { field: null, group: 'auto', mode: 'runs', sort: 'desc', zero: true },
+    scatterByGroups: false,
+    boxMeans: false,
     collapsed: [],
   },
   colors: {},
@@ -494,8 +501,8 @@ export class AppState {
   }
 
   /** Asks the host to save a line chart's data (full history of the metric for these runs). */
-  saveLineData(metric: string, runKeys: string[]): void {
-    this.post({ type: 'saveLineData', metric, runKeys });
+  saveLineData(metric: string, runKeys: string[], groups?: Record<string, string>): void {
+    this.post(groups ? { type: 'saveLineData', metric, runKeys, groups } : { type: 'saveLineData', metric, runKeys });
   }
 
   /** Asks the host to save a rendered chart (base64 PNG) into the cache folder. */

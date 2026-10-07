@@ -3,7 +3,8 @@
 // its state. Run-level charts use only data already in the webview (params + metrics.json
 // summaries); they never request metrics.jsonl histories.
 import { barData, boxData, logTicks, niceTicks, NONE_GROUP, scatterData, type BarData, type BoxData, type ScatterData } from '../model/analysis';
-import { barCsv, boxCsv, scatterCsv } from '../model/plotData';
+import { scatterGroupMeans, stats, type GroupPoint } from '../model/groupAgg';
+import { barCsv, boxCsv, scatterCsv, scatterGroupCsv } from '../model/plotData';
 import { parseColumnId } from '../model/run';
 import { cssVar, formatDuration, formatNumber, formatTime, h, palette, withAlpha } from './dom';
 import { fieldItems } from './filters';
@@ -255,6 +256,15 @@ export class Analysis {
     const autoLabel = `auto (${this.st.s.groupBy ? this.st.fieldLabel(this.st.s.groupBy) : 'table grouping: none'})`;
     const groupOpts = (): PickItem[] => [{ value: 'auto', label: autoLabel }, ...fieldItems(groups, 'none')];
     const opt = (value: string, label: string) => h('option', { value }, label);
+    // "Plot by groups" switch; disabled (shown off) while there is no group field to average by.
+    const byGroupsToggle = (on: boolean, possible: boolean, onChange: (v: boolean) => void, title: string, disabledTitle: string) => {
+      const t = toggle('Plot by groups', on && possible, onChange, possible ? title : disabledTitle);
+      if (!possible) {
+        t.classList.add('disabled');
+        (t.querySelector('input') as HTMLInputElement).disabled = true;
+      }
+      return t;
+    };
 
     if (c.kind === 'scatter') {
       c.controls.replaceChildren(
@@ -263,6 +273,7 @@ export class Analysis {
         pick('Y', fieldItems(numeric), r.y ?? '', (v) => set({ y: v })),
         pick('Size', fieldItems(numeric, 'none'), r.size ?? '', (v) => set({ size: v || null })),
         pick('Color', groupOpts(), a.color ?? '', (v) => set({ color: v || null }), 'Colour points by a categorical field'),
+        byGroupsToggle(a.scatterByGroups, !!r.color, (v) => set({ scatterByGroups: v }), 'One point per Color group at the mean of its runs (bars: ±1 standard deviation)', 'Choose a Color field (or group the table) to plot group means'),
         toggle('Log X', a.logX, (v) => set({ logX: v })),
         toggle('Log Y', a.logY, (v) => set({ logY: v })),
       );
@@ -270,14 +281,14 @@ export class Analysis {
       c.controls.replaceChildren(
         pick('Value', fieldItems(numeric), r.boxField ?? '', (v) => set({ boxField: v })),
         pick('Group', groupOpts(), a.boxGroup ?? '', (v) => set({ boxGroup: v || null }), 'One box per value of this field'),
+        byGroupsToggle(a.boxMeans, true, (v) => set({ boxMeans: v }), 'Mark each box with the mean of its runs (◆)', ''),
         toggle('Log Y', a.boxLogY, (v) => set({ boxLogY: v })),
       );
     } else {
-      const modeSel = select('Bars', [opt('runs', 'one per run'), opt('groups', 'group mean (min–max)')], a.bar.mode, (v) => setBar({ mode: v as 'runs' | 'groups' }));
       c.controls.replaceChildren(
         pick('Value', fieldItems(numeric), r.barField ?? '', (v) => setBar({ field: v })),
-        modeSel,
         pick('Group', groupOpts(), a.bar.group ?? '', (v) => setBar({ group: v || null }), 'Colour (per run) or aggregate (group mean) by this field'),
+        byGroupsToggle(a.bar.mode === 'groups', !!r.barGroup, (v) => setBar({ mode: v ? 'groups' : 'runs' }), 'One bar per group: the mean of its runs, with a min–max whisker', 'Choose a Group field (or group the table) to plot group means'),
         select('Sort', [opt('desc', 'highest first'), opt('asc', 'lowest first'), opt('table', 'table order')], a.bar.sort, (v) => setBar({ sort: v as 'desc' | 'asc' | 'table' })),
         toggle('Start at zero', a.bar.zero, (v) => setBar({ zero: v }), 'Bars start at 0 (off: the axis fits the data range)'),
       );
@@ -297,10 +308,12 @@ export class Analysis {
     if (kind === 'scatter') {
       if (!r.x || !r.y) return this.showEmpty(c, 'No numeric run-level fields found (params or metrics.json).');
       const data = scatterData(runs, r.x, r.y, { sizeField: r.size, groupField: r.color });
-      const key = JSON.stringify([...common, data]);
+      const byGroups = this.st.s.analysis.scatterByGroups && !!r.color;
+      const key = JSON.stringify([...common, data, byGroups]);
       if (key === c.renderedKey) return;
       c.renderedKey = key;
-      this.drawScatter(c, data, r.x, r.y, r.size, r.color, width, runs.length);
+      if (byGroups) this.drawScatter(c, { ...data, points: scatterGroupMeans(data) }, r.x, r.y, null, r.color, width, runs.length, true);
+      else this.drawScatter(c, data, r.x, r.y, r.size, r.color, width, runs.length);
     } else if (kind === 'box') {
       if (!r.boxField) return this.showEmpty(c, 'No numeric run-level fields found (params or metrics.json).');
       const data = boxData(runs, r.boxField, r.boxGroup);
@@ -331,7 +344,8 @@ export class Analysis {
     if (kind === 'scatter') {
       if (!r.x || !r.y) return this.st.showError('Nothing to export: choose X and Y.');
       const d = scatterData(runs, r.x, r.y, { sizeField: r.size, groupField: r.color });
-      this.st.savePlotData(`scatter ${label(r.y)} vs ${label(r.x)}`, scatterCsv(d, r.x, r.y, r.size, r.color));
+      if (this.st.s.analysis.scatterByGroups && r.color) this.st.savePlotData(`scatter ${label(r.y)} vs ${label(r.x)} by group`, scatterGroupCsv(scatterGroupMeans(d), r.x, r.y, r.color));
+      else this.st.savePlotData(`scatter ${label(r.y)} vs ${label(r.x)}`, scatterCsv(d, r.x, r.y, r.size, r.color));
     } else if (kind === 'box') {
       if (!r.boxField) return this.st.showError('Nothing to export: choose a field.');
       this.st.savePlotData(`box ${label(r.boxField)}`, boxCsv(boxData(runs, r.boxField, r.boxGroup), r.boxField, r.boxGroup));
@@ -429,18 +443,23 @@ export class Analysis {
     );
   }
 
-  private drawScatter(c: RunLevelChart, data: ScatterData, xf: string, yf: string, sizeF: string | null, colorF: string | null, w: number, total: number): void {
+  /** `byGroups`: the points are group means (GroupPoint), drawn larger with ±1 std whiskers. */
+  private drawScatter(c: RunLevelChart, data: ScatterData, xf: string, yf: string, sizeF: string | null, colorF: string | null, w: number, total: number, byGroups = false): void {
     const { logX, logY } = this.st.s.analysis;
     const colors = palette();
     const colorOf = colorF ? this.st.groupColorIndex(colorF) : new Map<string, number>();
-    const xs = makeScale(data.points.map((p) => p.x), M.l, w - M.r, logX);
-    const ys = makeScale(data.points.map((p) => p.y), CHART_H - M.b, M.t, logY);
+    const gp = (p: ScatterData['points'][number]) => p as GroupPoint;
+    // with group means, the axes also cover the ±1 std whiskers
+    const spanX = byGroups ? data.points.flatMap((p) => [p.x - gp(p).sx, p.x + gp(p).sx]) : data.points.map((p) => p.x);
+    const spanY = byGroups ? data.points.flatMap((p) => [p.y - gp(p).sy, p.y + gp(p).sy]) : data.points.map((p) => p.y);
+    const xs = makeScale(spanX, M.l, w - M.r, logX);
+    const ys = makeScale(spanY, CHART_H - M.b, M.t, logY);
     const pts = data.points.filter((p) => xs.valid(p.x) && ys.valid(p.y));
     const logDropped = data.points.length - pts.length;
     const sizes = pts.map((p) => p.size).filter((v): v is number => v !== null);
     const sMin = Math.min(...sizes);
     const sMax = Math.max(...sizes);
-    const radius = (v: number | null) => (v === null || !sizes.length ? 4.5 : sMax === sMin ? 7 : 3 + 9 * Math.sqrt((v - sMin) / (sMax - sMin)));
+    const radius = (v: number | null) => (v === null || !sizes.length ? (byGroups ? 7 : 4.5) : sMax === sMin ? 7 : 3 + 9 * Math.sqrt((v - sMin) / (sMax - sMin)));
 
     const svg = s('svg', { width: w, height: CHART_H, class: 'scatter', role: 'img', 'aria-label': `Scatter of ${this.st.fieldLabel(yf)} vs ${this.st.fieldLabel(xf)}` });
     this.axes(svg, xs, ys, formatterFor(xf), formatterFor(yf), w, CHART_H, M, this.st.fieldLabel(xf), this.st.fieldLabel(yf));
@@ -454,6 +473,20 @@ export class Analysis {
       const color = colors[p.group !== null ? (colorOf.get(p.group) ?? 0) : 0]!;
       const focused = p.key === this.st.s.focused;
       const selected = sel.has(p.key);
+      if (byGroups) {
+        const { sx, sy, n } = gp(p);
+        const cx = xs.map(p.x);
+        const cy = ys.map(p.y);
+        const clampX = (v: number) => (xs.valid(v) ? xs.map(v) : cx);
+        const clampY = (v: number) => (ys.valid(v) ? ys.map(v) : cy);
+        svg.append(
+          s('line', { x1: clampX(p.x - sx), x2: clampX(p.x + sx), y1: cy, y2: cy, stroke: color, 'stroke-width': 1.5, opacity: 0.8 }),
+          s('line', { x1: cx, x2: cx, y1: clampY(p.y - sy), y2: clampY(p.y + sy), stroke: color, 'stroke-width': 1.5, opacity: 0.8 }),
+          s('circle', { cx, cy, r: 7, fill: withAlpha(color, 0.85), stroke: fg, 'stroke-width': 1.5, 'data-key': p.key, class: 'pt' }),
+        );
+        rows.set(p.key, [`${p.name} — mean of ${n} run${n === 1 ? '' : 's'}`, `${this.st.fieldLabel(xf)}: ${xFmt(p.x)} ± ${xFmt(sx)}`, `${this.st.fieldLabel(yf)}: ${yFmt(p.y)} ± ${yFmt(sy)}`]);
+        continue;
+      }
       svg.append(
         s('circle', {
           cx: xs.map(p.x),
@@ -471,8 +504,14 @@ export class Analysis {
       if (colorF) lines.push(`${this.st.fieldLabel(colorF)}: ${p.group}`);
       rows.set(p.key, lines);
     }
-    this.mountSvg(c, svg, rows);
+    this.mountSvg(c, svg, rows, (key) => !key.startsWith('group:'));
     const excluded = data.excluded + logDropped;
+    if (byGroups) {
+      const n = pts.reduce((a, p) => a + gp(p).n, 0);
+      c.info.textContent = `${pts.length} group mean${pts.length === 1 ? '' : 's'} of ${n} runs (±1 standard deviation)${data.excluded ? ` · ${data.excluded} runs excluded (missing or non-numeric)` : ''}`;
+      this.renderGroupLegend(c, data.groups, colorOf, colorF);
+      return;
+    }
     c.info.textContent = `${pts.length} of ${total} filtered runs plotted${excluded ? ` · ${excluded} excluded (missing, non-numeric${logDropped ? ' or ≤ 0 on a log axis' : ''})` : ''} · click a point to open the run`;
     this.renderGroupLegend(c, colorF ? data.groups : [], colorOf, colorF);
   }
@@ -501,7 +540,7 @@ export class Analysis {
       const color = colors[b.label === 'all runs' ? 0 : (colorOf.get(b.label) ?? 0)]!;
       const g = s('g', {});
       g.append(
-        s('title', {}, `${b.label} (n=${b.n})\nmedian ${fmt(b.median)}\nIQR ${fmt(b.q1)} – ${fmt(b.q3)}\nrange ${fmt(b.min)} – ${fmt(b.max)}`),
+        s('title', {}, `${b.label} (n=${b.n})\nmean ${fmt(b.values.reduce((a, v) => a + v.value, 0) / Math.max(1, b.values.length))}\nmedian ${fmt(b.median)}\nIQR ${fmt(b.q1)} – ${fmt(b.q3)}\nrange ${fmt(b.min)} – ${fmt(b.max)}`),
         s('line', { x1: cx, x2: cx, y1: clampY(b.lo), y2: clampY(b.q1), stroke: color }),
         s('line', { x1: cx, x2: cx, y1: clampY(b.q3), y2: clampY(b.hi), stroke: color }),
         s('line', { x1: cx - bw / 4, x2: cx + bw / 4, y1: clampY(b.lo), y2: clampY(b.lo), stroke: color }),
@@ -509,6 +548,15 @@ export class Analysis {
         s('rect', { x: cx - bw / 2, y: clampY(b.q3), width: bw, height: Math.max(1, clampY(b.q1) - clampY(b.q3)), fill: withAlpha(color, 0.18), stroke: color }),
         s('line', { x1: cx - bw / 2, x2: cx + bw / 2, y1: clampY(b.median), y2: clampY(b.median), stroke: color, 'stroke-width': 2.5 }),
       );
+      // Plot by groups: the group mean as a diamond on the box
+      const mean = this.st.s.analysis.boxMeans ? stats(b.values.map((v) => v.value)) : null;
+      if (mean && ys.valid(mean.mean)) {
+        const my = ys.map(mean.mean);
+        const d = 6;
+        g.append(
+          s('polygon', { points: `${cx},${my - d} ${cx + d},${my} ${cx},${my + d} ${cx - d},${my}`, fill: color, stroke: fg, 'stroke-width': 1.2, class: 'box-mean' }, s('title', {}, `${b.label}: mean ${fmt(mean.mean)} (n=${mean.n}, std ${fmt(mean.std)})`)),
+        );
+      }
       const label = b.label.length > 18 ? b.label.slice(0, 17) + '…' : b.label;
       g.append(
         s('text', { x: cx, y: CHART_H - M.b + 16, 'text-anchor': 'middle', 'font-size': 11, fill: fg }, s('title', {}, b.label), label),

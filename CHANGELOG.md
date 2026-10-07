@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2
+
+- **Plot by groups.** Every chart has a *Plot by groups* switch. Line: one curve per table group, the mean of its selected runs at each step (tooltips show how many runs are behind each point). Scatter: one point per Color group at the mean, with ±1 standard deviation whiskers. Bar: one bar per group (mean, min–max whisker; replaces the "Bars" menu). Box: a mean marker (◆) on each box. Off = the previous per-run plots. The chart data CSVs follow the switch.
+- **Group statistics in the table.** When the table is grouped, each group header row shows the group mean (μ) of every numeric column (config values, run metrics, summary values, duration, step); hover for n, min, max and standard deviation.
+- **New logo** (`media/curly_m.svg`, same file name). The panel loads it with a content-hash query, so a replaced file is never shown from a cache.
+
 ## 0.2.1
 
 - **Run list in the activity bar.** The TraceML view, empty until now, lists the runs by status (running, stale and failed first) with their key metric and age; the title shows the counts. Click a run to open it in the panel's inspector; right-click to copy its folder path or open its log / `metrics.jsonl` read-only. TraceML now polls while the panel or this view is visible.

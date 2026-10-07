@@ -2,6 +2,7 @@
 // chart per metric with one line per selected run. Zoom is kept across live updates.
 import uPlot from 'uplot';
 import { groupLabel } from '../model/analysis';
+import { groupMeanSeries, plotGroups } from '../model/groupAgg';
 import { emaSmooth, seriesXY, type XMode } from '../model/metricSeries';
 import type { RunSummary } from '../types';
 import { cssVar, formatClock, formatNumber, h, palette, withAlpha } from './dom';
@@ -35,18 +36,29 @@ export function chartTheme() {
   };
 }
 
+/** One plotted line: a run, or (Plot by groups) the mean of a group's runs. */
 interface RunLine {
-  run: RunSummary;
+  key: string;
+  name: string;
   color: string;
   x: number[];
   y: (number | null)[];
   total: number;
+  /** Group lines: number of runs behind each point, by x. */
+  nAt?: Map<number, number>;
+}
+
+/** A group of plotted runs (Plot by groups). */
+export interface PlotGroup {
+  label: string;
+  color: string;
+  runs: RunSummary[];
 }
 
 function runLine(st: AppState, run: RunSummary, metric: string, xMode: XMode, logY: boolean, color: string): RunLine | null {
   const p = st.series.get(seriesId(run.key, metric));
   if (!p) return null;
-  return { run, color, ...seriesXY(p, xMode, logY), total: p.total };
+  return { key: run.key, name: run.name, color, ...seriesXY(p, xMode, logY), total: p.total };
 }
 
 class ChartCard {
@@ -80,13 +92,32 @@ class ChartCard {
     );
   }
 
-  update(st: AppState, runs: RunSummary[], themeVersion: number, colorFor: (run: RunSummary) => string): void {
+  update(st: AppState, runs: RunSummary[], themeVersion: number, colorFor: (run: RunSummary) => string, groups: PlotGroup[] | null = null): void {
     const { xMode, logY, smoothing, hidden } = st.s.plot;
     const hiddenSet = new Set(hidden);
     const lines: RunLine[] = [];
     let loading = 0;
     let downsampled = 0;
-    for (const run of runs) {
+    // Plot by groups: one line per group, the mean of its runs at each step.
+    for (const g of groups ?? []) {
+      const series = [];
+      let missing = 0;
+      for (const run of g.runs) {
+        if (hiddenSet.has(run.key)) continue;
+        const p = st.series.get(seriesId(run.key, this.metric));
+        if (!p) missing++;
+        else {
+          series.push(p);
+          if (p.total > p.y.length) downsampled++;
+        }
+      }
+      if (missing) loading++;
+      if (!series.length) continue;
+      const m = groupMeanSeries(series, xMode, logY);
+      if (!m.x.length) continue;
+      lines.push({ key: `group:${g.label}`, name: `${g.label} (mean of ${series.length})`, color: g.color, x: m.x, y: m.y, total: m.x.length, nAt: new Map(m.x.map((x, i) => [x, m.n[i]!])) });
+    }
+    for (const run of groups ? [] : runs) {
       if (hiddenSet.has(run.key)) continue;
       const l = runLine(st, run, this.metric, xMode, logY, colorFor(run));
       if (!l) {
@@ -101,7 +132,7 @@ class ChartCard {
     this.smoothing = smoothing;
 
     const points = lines.reduce((a, l) => a + l.x.length, 0);
-    this.info.textContent = [lines.length ? `${lines.length} run${lines.length === 1 ? '' : 's'}` : '', downsampled ? 'downsampled' : '', loading && lines.length ? `loading ${loading}…` : '']
+    this.info.textContent = [lines.length ? `${lines.length} ${groups ? 'group' : 'run'}${lines.length === 1 ? '' : 's'}` : '', downsampled ? 'downsampled' : '', loading && lines.length ? `loading ${loading}…` : '']
       .filter(Boolean)
       .join(' · ');
     this.info.title = `${points} points drawn${downsampled ? `; series longer than ${st.config.maxPointsPerSeries} points use min/max-preserving downsampling` : ''}`;
@@ -131,7 +162,7 @@ class ChartCard {
     const extent: [number, number] | null = xs.length ? [xs[0]!, xs[xs.length - 1]!] : null;
 
     this.shown = { data, xMode, logY, smooth };
-    const sig = JSON.stringify([xMode, logY, smooth, lines.map((l) => [l.run.key, l.color, l.run.name]), themeVersion]);
+    const sig = JSON.stringify([xMode, logY, smooth, lines.map((l) => [l.key, l.color, l.name]), themeVersion]);
     const width = Math.max(200, this.body.clientWidth || 400);
     if (this.chart && sig === this.sig) {
       // Live update: keep the user's zoom if they zoomed in, otherwise follow the growing data.
@@ -160,8 +191,8 @@ class ChartCard {
     const t = chartTheme();
     const series: uPlot.Series[] = [{ label: X_LABEL[xMode] }];
     for (const l of lines) {
-      if (smooth) series.push({ label: `${l.run.name} (raw)`, stroke: withAlpha(l.color, 0.25), width: 1 * k, points: { show: false } });
-      series.push({ label: l.run.name, stroke: l.color, width: (smooth ? 2 : 1.6) * k, points: { size: 5 * k, fill: l.color } });
+      if (smooth) series.push({ label: `${l.name} (raw)`, stroke: withAlpha(l.color, 0.25), width: 1 * k, points: { show: false } });
+      series.push({ label: l.name, stroke: l.color, width: (smooth ? 2 : l.nAt ? 2.2 : 1.6) * k, points: { size: 5 * k, fill: l.color } });
     }
     const axis = (values?: uPlot.Axis['values']): uPlot.Axis => ({
       stroke: t.axis,
@@ -221,8 +252,9 @@ class ChartCard {
           'div',
           { class: `tt-row${hot ? ' hot' : ''}` },
           h('span', { class: 'swatch', style: `background:${l.color}` }),
-          h('span', { class: 'tt-name' }, l.run.name),
+          h('span', { class: 'tt-name' }, l.name),
           h('span', { class: 'tt-val' }, v === null ? '—' : formatNumber(v)),
+          l.nAt && typeof x === 'number' && l.nAt.has(x) ? h('span', { class: 'tt-raw' }, `n=${l.nAt.get(x)}`) : null,
           raw !== undefined && raw !== null ? h('span', { class: 'tt-raw' }, formatNumber(raw)) : null,
         ),
       );
@@ -275,7 +307,7 @@ class ChartCard {
         chart: u.ctx.canvas,
         width,
         height: CHART_H,
-        legend: this.lines.map((l) => ({ color: l.color, label: l.run.name })),
+        legend: this.lines.map((l) => ({ color: l.color, label: l.name })),
       });
       u.destroy();
       return png;
@@ -438,7 +470,7 @@ export class Plots {
 
   private renderControls(): void {
     const p = this.st.s.plot;
-    const key = JSON.stringify([p.xMode, p.logY, p.colorBy, !!this.st.s.groupBy]);
+    const key = JSON.stringify([p.xMode, p.logY, p.colorBy, p.byGroups, !!this.st.s.groupBy]);
     if (key === this.controlsKey) return;
     this.controlsKey = key;
     const xSelect = h('select', { 'aria-label': 'X axis' }, ...(['step', 'epoch', 'wall'] as XMode[]).map((m) => h('option', { value: m, selected: p.xMode === m }, X_LABEL[m])));
@@ -461,6 +493,12 @@ export class Plots {
     }, this.st.s.groupBy ? 'Colour lines by the table grouping' : 'Group the table (Group) to colour lines by group');
     if (!this.st.s.groupBy) colorBy.classList.add('disabled');
     (colorBy.querySelector('input') as HTMLInputElement).disabled = !this.st.s.groupBy;
+    const byGroups = toggle('Plot by groups', p.byGroups && !!this.st.s.groupBy, (v) => {
+      p.byGroups = v;
+      this.st.changed('plots');
+    }, this.st.s.groupBy ? 'One line per table group: the mean of its selected runs at each step' : 'Group the table (Group) to plot group means');
+    if (!this.st.s.groupBy) byGroups.classList.add('disabled');
+    (byGroups.querySelector('input') as HTMLInputElement).disabled = !this.st.s.groupBy;
     this.controls.replaceChildren(
       h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'X'), xSelect),
       toggle('Log Y', p.logY, (v) => {
@@ -469,6 +507,7 @@ export class Plots {
       }),
       h('label', { class: 'field', title: 'Exponential moving average; the raw line stays faintly visible' }, h('span', { class: 'field-label' }, 'Smoothing'), smoothing, smoothingValue),
       colorBy,
+      byGroups,
     );
   }
 
@@ -485,7 +524,33 @@ export class Plots {
     }
   }
 
+  /** Plot by groups is on and there is a grouping: the groups of the plotted runs, with colours. */
+  private plotGroups(): PlotGroup[] | null {
+    const field = this.st.s.groupBy;
+    if (!this.st.s.plot.byGroups || !field) return null;
+    const colors = palette();
+    const idx = this.st.groupColorIndex(field, [...this.st.filteredRuns(), ...this.st.plottedRuns()]);
+    return plotGroups(this.st.plottedRuns(), field).map((g) => ({ ...g, color: colors[idx.get(g.label) ?? 0] ?? '#888' }));
+  }
+
   private renderLegend(): void {
+    const groups = this.plotGroups();
+    if (groups) {
+      // group legend: colour, group, number of runs averaged (hidden runs are left out)
+      const hidden = new Set(this.st.s.plot.hidden);
+      const key = JSON.stringify(['groups', groups.map((g) => [g.label, g.color, g.runs.map((r) => r.key)]), [...hidden], this.themeVersion]);
+      if (key === this.legendKey) return;
+      this.legendKey = key;
+      this.legend.replaceChildren(
+        h('span', { class: 'muted small' }, `Mean per ${this.st.fieldLabel(this.st.s.groupBy!)}:`),
+        ...groups.map((g) => {
+          const n = g.runs.filter((r) => !hidden.has(r.key)).length;
+          return h('span', { class: 'legend-item static', title: g.runs.map((r) => r.name).join('\n') }, h('span', { class: 'swatch', style: `background:${g.color}` }), h('span', { class: 'legend-name' }, g.label), h('span', { class: 'muted' }, `${n} run${n === 1 ? '' : 's'}`));
+        }),
+      );
+      this.legend.hidden = false;
+      return;
+    }
     const colorFor = this.colorResolver();
     const groupField = this.st.s.plot.colorBy === 'group' ? this.st.s.groupBy : null;
     const hidden = new Set(this.st.s.plot.hidden);
@@ -519,6 +584,7 @@ export class Plots {
 
   private renderCharts(): void {
     const runs = this.st.plottedRuns();
+    const groups = this.plotGroups();
     const metrics = this.st.plotMetrics();
     const colorFor = this.colorResolver();
     const hintKey = !runs.length ? 'nosel' : !metrics.length ? 'nometric' : '';
@@ -551,14 +617,16 @@ export class Plots {
           () => void this.exportCard(c),
           () => {
             const hidden = new Set(this.st.s.plot.hidden);
-            this.st.saveLineData(m, this.st.plottedRuns().filter((r) => !hidden.has(r.key)).map((r) => r.key));
+            const keys = this.st.plottedRuns().filter((r) => !hidden.has(r.key)).map((r) => r.key);
+            const groups = this.plotGroups();
+            this.st.saveLineData(m, keys, groups ? Object.fromEntries(groups.flatMap((g) => g.runs.map((r) => [r.key, g.label]))) : undefined);
           },
         );
         card = c;
         this.cards.set(m, card);
       }
       if (this.grid.children[i] !== card.el) this.grid.insertBefore(card.el, this.grid.children[i] ?? null);
-      card.update(this.st, runs, this.themeVersion, colorFor);
+      card.update(this.st, runs, this.themeVersion, colorFor, groups);
     });
   }
 }

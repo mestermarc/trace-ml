@@ -1,6 +1,7 @@
 // Virtualized run table: only rows in view exist in the DOM, and rows are keyed so a live refresh
 // only rewrites rows whose content actually changed (no flicker, 1,000+ runs stay responsive).
 import { describeFilter, parseColumnFilter, suggestValues } from '../model/filters';
+import { groupColumnStats, isStatColumn } from '../model/groupAgg';
 import { columnValue, toggleSort, type ColumnDef } from '../model/run';
 import type { RunSummary } from '../types';
 import { esc, formatDuration, formatScalar, formatTime, h, nextFrame, palette } from './dom';
@@ -387,10 +388,26 @@ export class RunTable {
         const allSel = nSel > 0 && nSel === g.runs.length;
         cls = 'tr row group-row';
         label = `Group ${g.label}`;
+        // The label spans the leading columns up to the first numeric one (at least two); each
+        // numeric column then shows the group mean (hover: n, min, max, std).
+        const firstStat = this.cols.findIndex(isStatColumn);
+        const span = Math.min(this.cols.length, Math.max(2, firstStat < 0 ? this.cols.length : firstStat));
+        const st = groupColumnStats(g.runs, this.cols.slice(span));
         html =
           `<div class="td sel"><input class="cb" type="checkbox" data-act="sel" aria-label="Select group ${esc(g.label)}"${allSel ? ' checked' : ''}></div>` +
-          `<div class="group-label" title="Click to ${it.collapsed ? 'expand' : 'collapse'}">${iconHtml(it.collapsed ? 'chevronRight' : 'chevronDown', 14)}<span class="swatch" style="background:${colors[it.color]}"></span>` +
+          `<div class="group-label" style="grid-column: span ${span}" title="Click to ${it.collapsed ? 'expand' : 'collapse'}">${iconHtml(it.collapsed ? 'chevronRight' : 'chevronDown', 14)}<span class="swatch" style="background:${colors[it.color]}"></span>` +
           `<span class="muted">${esc(groupField)}</span><b>${esc(g.label)}</b><span class="group-count">${g.runs.length} run${g.runs.length === 1 ? '' : 's'}${nSel ? ` · ${nSel} selected` : ''}</span></div>`;
+        for (const c of this.cols.slice(span)) {
+          const v = st.get(c.id);
+          if (!v) {
+            html += '<div class="td"></div>';
+            continue;
+          }
+          const fmt = (x: number) => (c.kind === 'fixed' && c.key === 'duration' ? formatDuration(x) : formatScalar(Number(x.toPrecision(6))));
+          const tip = `${c.label}: group mean of ${v.n} run${v.n === 1 ? '' : 's'}
+min ${fmt(v.min)} · max ${fmt(v.max)}${v.n > 1 ? ` · std ${fmt(v.std)}` : ''}`;
+          html += `<div class="td num group-stat" title="${esc(tip)}"><span class="group-stat-mark">μ</span>${esc(fmt(v.mean))}</div>`;
+        }
       } else {
         const r = it.run;
         const selected = sel.has(r.key);
@@ -415,7 +432,7 @@ export class RunTable {
       row.el.dataset.i = String(i);
       row.el.setAttribute('aria-label', label);
       row.el.style.top = `${i * ROW_H}px`;
-      if (it.kind === 'run') row.el.style.gridTemplateColumns = this.template;
+      row.el.style.gridTemplateColumns = this.template;
       next.set(key, row);
     }
     for (const [k, r] of this.rows) if (!next.has(k)) r.el.remove();

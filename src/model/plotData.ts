@@ -4,6 +4,8 @@
 import type { Scalar } from '../types';
 import type { BarData, BoxData, ScatterData } from './analysis';
 import type { MetricsHistory } from '../parsers/metricsJsonl';
+import { groupMeanSeries, type GroupPoint } from './groupAgg';
+import { extractSeries } from './metricSeries';
 import { parseColumnId } from './run';
 import { csvHeader, serializeTableCsv } from './tableExport';
 
@@ -61,4 +63,27 @@ export function lineCsv(metric: string, runs: readonly LineRun[]): { csv: string
     });
   }
   return { csv: serializeTableCsv({ header: ['run', 'path', 'step', 'epoch', 'time_s', metric], rows }), rows: rows.length };
+}
+
+/**
+ * Line chart by groups: one row per group and step with the group mean of `metric` and the number
+ * of runs behind it (full history, same matching as the plotted group curves).
+ */
+export function lineGroupCsv(metric: string, runs: readonly (LineRun & { group: string })[]): { csv: string; rows: number } {
+  const groups = new Map<string, LineRun[]>();
+  for (const r of runs) groups.set(r.group, [...(groups.get(r.group) ?? []), r]);
+  const rows: Scalar[][] = [];
+  for (const [label, rs] of groups) {
+    const m = groupMeanSeries(rs.map((r) => extractSeries(r.history, r.path, metric, r.startedAt, Number.POSITIVE_INFINITY)), 'step', false);
+    m.x.forEach((step, i) => rows.push([label, step, m.y[i]!, m.n[i]!]));
+  }
+  return { csv: serializeTableCsv({ header: ['group', 'step', `mean ${metric}`, 'n_runs'], rows }), rows: rows.length };
+}
+
+/** Scatter by groups: one row per group with the mean (and standard deviation) of x and y. */
+export function scatterGroupCsv(points: readonly GroupPoint[], x: string, y: string, group: string | null): string {
+  const X = fieldHeader(x);
+  const Y = fieldHeader(y);
+  const header = [group ? `group:${fieldHeader(group)}` : 'group', 'n', `mean ${X}`, `std ${X}`, `mean ${Y}`, `std ${Y}`];
+  return serializeTableCsv({ header, rows: points.map((p) => [p.group, p.n, p.x, p.sx, p.y, p.sy]) });
 }

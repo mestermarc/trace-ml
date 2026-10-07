@@ -278,6 +278,7 @@ TraceML uses a dark-only application shell with its own design system, inside a 
   - **Starting values:** adds each metric's starting value (its first logged, non-null value in `metrics.jsonl`) as `start` columns next to the metrics already shown. It also adds them to the Columns chooser, the scatter/box/bar fields, the inspector and the Compare view, so you can see whether runs started from the same point.
   - **Group** groups by status, group, tags, name, any config value, or a text summary field. The list is searchable: type part of a name (e.g. `batch`) and pick with ↑/↓ and Enter.
     - Each group gets a collapsible header row showing its color, value, run count and how many runs are selected. The header's checkbox selects the whole group.
+    - The header row also shows the **group mean (μ)** of every numeric column (config values, run metrics, summary values, duration, step). Hover for n, min, max and standard deviation.
     - Groups are ordered by value, with `(none)` last. Sorting applies within each group.
   - **Max rows** (next to the run count) limits the table to the first N rows: pick 25, 50, **100** (the default), 250, 500, 1000 or All, or type any whole number from 1 to 1000. The limit is applied after filters and sorting, and the toolbar shows "showing N of M". Charts and *Select filtered* still use all filtered runs.
   - **Export** saves the table as you see it as a CSV file; see [Exporting the table for an agent](#exporting-the-table-for-an-agent).
@@ -304,14 +305,16 @@ TraceML uses a dark-only application shell with its own design system, inside a 
       - The ⤓ button on a chart saves it as a **300 DPI PNG** (title, chart and legend, at the current zoom) to `traceml/.cache/plots/`. A bar shows the path, with *Copy path* and *Open*.
       - The 🗎 button saves the chart's **data as CSV** instead, for agents: the full (not downsampled) history of the metric for the plotted runs, one row per logged value (`run,path,step,epoch,time_s,<metric>`). See [Exporting chart data](#exporting-chart-data).
       - `null` values show as gaps; a missing value is simply absent. At most 30 runs are plotted.
+      - **Plot by groups** (needs a table grouping): one curve per group, the mean of its selected runs at each step (by epoch in epoch mode; wall time uses the mean time of each step). Runs that stopped early simply stop contributing; the tooltip shows how many runs are behind each point. Runs hidden in the legend are left out.
     - **Scatter** (all filtered runs, run-level data only):
       - X and Y can be any numeric field, and you can swap them. There's an optional *Size* field, a *Color* field (*auto* follows the grouping), and Log X / Log Y.
       - Runs with missing, `null`, NaN, non-numeric or (on a log axis) ≤ 0 values are left out, and the count is shown.
       - Hover over a point for its values; click it to open the run.
-    - **Box** (all filtered runs): one box per group, showing the quartiles, the median, and whiskers reaching to 1.5 × IQR. Every run is drawn as a jittered point, with outliers hollow. Hover for details, or click a point to open the run.
+      - **Plot by groups** (needs a Color field or a table grouping): one point per group at the mean X and Y, with ±1 standard deviation whiskers.
+    - **Box** (all filtered runs): one box per group, showing the quartiles, the median, and whiskers reaching to 1.5 × IQR. **Plot by groups** adds the group mean (◆). Every run is drawn as a jittered point, with outliers hollow. Hover for details, or click a point to open the run.
     - **Bar** (all filtered runs, run-level data only):
       - *One per run* draws horizontal bars, colored by the Group field if one is set, with at most 60 bars; filter to narrow down. Click a bar to open the run.
-      - *Group mean (min–max)* draws one bar per group with a whisker from min to max and the run count.
+      - **Plot by groups** draws one bar per group (the group mean) with a whisker from min to max and the run count.
       - Sort by highest first, lowest first or table order. *Start at zero* (on by default) keeps bar lengths honest; turn it off to fit the axis to the data range. Sorting is a display choice only; TraceML never ranks runs.
     - The ⤓ button in the Scatter, Box and Bar section headers saves that chart as a 300 DPI PNG, like the line charts. The 🗎 button next to it saves the chart's data as CSV.
 - **Remembered view:** the plotted metrics, selected runs, filters, sort order, columns and their order, grouping, chart settings and collapsed sections are restored when you reopen TraceML or reload the window. They're saved in `traceml/.cache/ui-state.json` (see `traceml.cacheDir`).
@@ -771,10 +774,10 @@ Every chart has a 🗎 button that saves the data behind it as a CSV file in `tr
 
 | Chart | CSV columns |
 | --- | --- |
-| Line | `run,path,step,epoch,time_s,<metric>`: every logged value of the metric for the plotted runs, full history (not downsampled), empty = `null` |
+| Line | `run,path,step,epoch,time_s,<metric>`: every logged value of the metric for the plotted runs, full history (not downsampled), empty = `null`. With *Plot by groups*: `group,step,mean <metric>,n_runs` |
 | Bar, one per run | `run,path,[group:<field>],<field>`: all filtered runs, also those beyond the 60 bars drawn |
 | Bar, group mean | `group:<field>,n,mean <field>,min <field>,max <field>` |
-| Scatter | `run,path,<x>,<y>,[<size>],[group:<field>]` |
+| Scatter | `run,path,<x>,<y>,[<size>],[group:<field>]`. With *Plot by groups*: `group,n,mean <x>,std <x>,mean <y>,std <y>` |
 | Box | `group:<field>,run,path,<field>`: one row per run; quartiles follow from the values |
 
 ```csv

@@ -1221,7 +1221,7 @@ input[type='checkbox'].switch-input::after {
 }
 
 .group-row {
-  display: flex;
+  display: grid;
   align-items: center;
   cursor: pointer;
   background: var(--tm-bg-sunken);
@@ -2428,4 +2428,22 @@ tr.cmp-section th {
 .cond-add .select-like {
   width: 170px;
   flex: none;
+}
+
+/* group header rows: the group mean of each numeric column */
+.group-row .group-label {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.group-stat {
+  color: var(--tm-text-secondary);
+  font-style: italic;
+}
+
+.group-stat-mark {
+  margin-right: 3px;
+  font-size: 10px;
+  color: var(--tm-text-muted);
+  font-style: normal;
 }

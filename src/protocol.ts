@@ -46,7 +46,7 @@ export type WebviewToHost =
   /** Save a scatter / box / bar chart's data (CSV built by the webview from run-level values). */
   | { type: 'savePlotData'; title: string; csv: string }
   /** Save a line chart's data: the host writes the full history of `metric` for these runs. */
-  | { type: 'saveLineData'; metric: string; runKeys: string[] }
+  | { type: 'saveLineData'; metric: string; runKeys: string[]; groups?: Record<string, string> }
   | { type: 'copyPlotPath' }
   | { type: 'openPlot' };
 
@@ -116,7 +116,10 @@ export function parseWebviewMessage(msg: unknown): WebviewToHost | null {
       if (typeof m.title === 'string' && m.title.length <= 200 && typeof m.csv === 'string' && m.csv.length <= MAX_CSV_CHARS) return { type: 'savePlotData', title: m.title, csv: m.csv };
       return null;
     case 'saveLineData':
-      if (typeof m.metric === 'string' && m.metric.length <= 500 && isStringArray(m.runKeys) && m.runKeys.length <= 1000) return { type: 'saveLineData', metric: m.metric, runKeys: m.runKeys };
+      if (typeof m.metric === 'string' && m.metric.length <= 500 && isStringArray(m.runKeys) && m.runKeys.length <= 1000) {
+        if (m.groups === undefined) return { type: 'saveLineData', metric: m.metric, runKeys: m.runKeys };
+        return isStringRecord(m.groups) && Object.keys(m.groups).length <= 1000 ? { type: 'saveLineData', metric: m.metric, runKeys: m.runKeys, groups: m.groups } : null;
+      }
       return null;
     case 'savePlot':
       if (typeof m.title === 'string' && m.title.length <= 200 && typeof m.data === 'string' && m.data.length <= MAX_BASE64 && BASE64.test(m.data)) {

@@ -6,7 +6,7 @@ import { CacheStore } from './cacheStore';
 import { RunsTreeProvider, runKeyOf } from './explorerView';
 import { parseHiddenRuns, serializeHiddenRuns, type HiddenRun } from './model/hiddenRuns';
 import { MAX_PNG_BYTES, isPng, pngSize, setPngDpi } from './model/png';
-import { lineCsv } from './model/plotData';
+import { lineCsv, lineGroupCsv } from './model/plotData';
 import { buildTableExport, exportFileName, plotFileName, serializeTableCsv } from './model/tableExport';
 import { READONLY_SCHEME, ReadonlyRunFiles } from './readonlyFs';
 import { joinPath, relativePath } from './paths';
@@ -23,6 +23,13 @@ const LEGACY_UI_STATE_KEY = 'traceml.uiState';
 const SERIES_PER_MESSAGE = 16;
 /** The run index is rewritten at most this often while runs change (e.g. during training). */
 const INDEX_SAVE_DELAY_MS = 10_000;
+
+/** Short FNV-1a hash of file bytes (cache busting; not security relevant). */
+export function contentHash(bytes: Uint8Array): string {
+  let h = 0x811c9dc5;
+  for (const b of bytes) h = Math.imul(h ^ b, 0x01000193) >>> 0;
+  return h.toString(16).padStart(8, '0');
+}
 
 /** True when `key` is a direct sub-folder of the runs folder `rootDir`. */
 function isRunOf(rootDir: string, key: string): boolean {
@@ -156,7 +163,7 @@ class TraceMLController implements vscode.Disposable {
       localResourceRoots: [vscode.Uri.joinPath(this.ctx.extensionUri, 'dist'), vscode.Uri.joinPath(this.ctx.extensionUri, 'media')],
     };
     const remembered = (await this.cache().readUiState()) ?? this.ctx.workspaceState.get(LEGACY_UI_STATE_KEY) ?? null;
-    panel.webview.html = this.html(panel.webview, remembered);
+    panel.webview.html = this.html(panel.webview, remembered, await this.logoVersion());
     this.panelDisposables.push(
       panel.webview.onDidReceiveMessage((m) => void this.onMessage(m)),
       panel.onDidDispose(() => this.onPanelDisposed()),
@@ -516,7 +523,7 @@ class TraceMLController implements vscode.Disposable {
           await this.savePlotData(msg.title, msg.csv, msg.csv.split('\n').length - 2);
           break;
         case 'saveLineData':
-          await this.saveLineData(msg.metric, msg.runKeys);
+          await this.saveLineData(msg.metric, msg.runKeys, msg.groups);
           break;
         case 'copyPlotPath':
           if (this.lastPlot) {
@@ -618,8 +625,11 @@ class TraceMLController implements vscode.Disposable {
     }
   }
 
-  /** Line chart data: the full (not downsampled) history of one metric for the plotted runs. */
-  private async saveLineData(metric: string, runKeys: string[]): Promise<void> {
+  /**
+   * Line chart data: the full (not downsampled) history of one metric for the plotted runs, or
+   * with `groups` (run key -> group label, "Plot by groups") the group means per step.
+   */
+  private async saveLineData(metric: string, runKeys: string[], groups?: Record<string, string>): Promise<void> {
     const byKey = new Map(this.store.summaries().map((r) => [r.key, r]));
     const runs = [];
     for (const key of [...new Set(runKeys)]) {
@@ -627,10 +637,10 @@ class TraceMLController implements vscode.Disposable {
       if (!summary) continue;
       await this.store.pollHistory(key);
       const h = this.store.history(key);
-      if (h) runs.push({ name: summary.name, path: this.store.dirOf(key) ?? key, history: h.history, startedAt: h.startedAt });
+      if (h) runs.push({ name: summary.name, path: this.store.dirOf(key) ?? key, history: h.history, startedAt: h.startedAt, group: groups?.[key] ?? '(none)', key });
     }
-    const { csv, rows } = lineCsv(metric, runs);
-    await this.savePlotData(metric, csv, rows);
+    const { csv, rows } = groups ? lineGroupCsv(metric, runs) : lineCsv(metric, runs);
+    await this.savePlotData(groups ? `${metric} by group` : metric, csv, rows);
   }
 
   /** Opens a run file read-only (only the fixed file names, only inside the run folder). */
@@ -649,7 +659,19 @@ class TraceMLController implements vscode.Disposable {
     this.post({ type: 'error', message });
   }
 
-  private html(webview: vscode.Webview, remembered: unknown): string {
+  /**
+   * Content hash of media/curly_m.svg. It is added to the logo URL so the webview never shows a
+   * cached older drawing after the file was replaced under the same name.
+   */
+  private async logoVersion(): Promise<string> {
+    try {
+      return contentHash(await vscode.workspace.fs.readFile(vscode.Uri.joinPath(this.ctx.extensionUri, 'media', 'curly_m.svg')));
+    } catch {
+      return String(this.ctx.extension.packageJSON.version ?? '0');
+    }
+  }
+
+  private html(webview: vscode.Webview, remembered: unknown, logoVersion = ''): string {
     const n = nonce();
     const script = webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, 'dist', 'webview.js'));
     const style = webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, 'dist', 'webview.css'));
@@ -669,7 +691,7 @@ class TraceMLController implements vscode.Disposable {
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="${style}">
-<meta name="traceml-logo" content="${webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, 'media', 'curly_m.svg'))}">
+<meta name="traceml-logo" content="${webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, 'media', 'curly_m.svg')).with({ query: `v=${logoVersion}` })}">
 <title>TraceML</title>
 </head>
 <body>
