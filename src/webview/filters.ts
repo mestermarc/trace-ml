@@ -1,6 +1,6 @@
 // Runs toolbar: search, Filter / Group / Columns / More, status segment, differing-params switch
 // and removable chips for every active filter.
-import { NUMERIC_OPS, TEXT_OPS, buildFilterExpr, defaultVisibleColumns, describeFilter, parseColumnFilter, selectFiltered, suggestValues, type FilterOp } from '../model/filters';
+import { DATE_OPS, NUMERIC_OPS, TEXT_OPS, buildFilterExpr, defaultVisibleColumns, describeFilter, parseColumnFilter, selectFiltered, suggestValues, type FilterOp } from '../model/filters';
 import type { ColumnDef } from '../model/run';
 import { DISPLAY_STATUSES, type DisplayStatus } from '../types';
 import { h } from './dom';
@@ -310,8 +310,9 @@ export class Toolbar {
       const c = cols.get(id);
       const isRoot = id === 'location' && expr.startsWith('/^');
       const label = isRoot ? 'run root' : c ? columnLabel(c) : id;
-      const shown = isRoot ? expr.slice(2, -3).replace(/\\(.)/g, '$1') : describeFilter(expr);
-      const invalid = parseColumnFilter(expr).error;
+      const date = { date: this.st.isDateColumn(id) };
+      const shown = isRoot ? expr.slice(2, -3).replace(/\\(.)/g, '$1') : describeFilter(expr, date);
+      const invalid = parseColumnFilter(expr, date).error;
       const el = chip(
         kv(label, shown),
         () => {
@@ -369,33 +370,60 @@ export class Toolbar {
       const suggest = h('datalist', { id: 'traceml-filter-values' });
       const expr = h('input', { type: 'text', list: 'traceml-filter-values', 'aria-label': 'Value', spellcheck: 'false', autocomplete: 'off' });
       const err = h('div', { class: 'field-error', role: 'alert' });
+      // Date columns get date pickers (time optional: empty = the whole day); "between" shows two.
+      const datePick = (which: string) => {
+        const date = h('input', { type: 'date', 'aria-label': `${which} date` });
+        const time = h('input', { type: 'time', 'aria-label': `${which} time (optional)`, title: 'Optional time; empty = the whole day' });
+        return { el: h('span', { class: 'date-pick' }, date, time), value: () => (date.value ? (time.value ? `${date.value} ${time.value}` : date.value) : '') };
+      };
+      const from = datePick('From');
+      const to = datePick('To');
+      const andSep = h('span', { class: 'muted' }, 'and');
+      const valueBox = h('span', { class: 'cond-value' });
+      const isDate = () => this.st.isDateColumn(colSel.value);
       const syncField = () => {
         this.filterField = colSel.value;
         const col = cols.find((c) => c.id === colSel.value);
-        const ops = col?.numeric ? NUMERIC_OPS : TEXT_OPS;
+        const kind = isDate() ? 'date' : col?.numeric ? 'number' : 'text';
+        const ops = kind === 'date' ? DATE_OPS : kind === 'number' ? NUMERIC_OPS : TEXT_OPS;
         // Keep the chosen operator while the field type stays the same; otherwise use the type's default.
         const prev = opSel.value as FilterOp;
-        const sameKind = opSel.dataset.numeric === String(!!col?.numeric);
-        opSel.dataset.numeric = String(!!col?.numeric);
+        const sameKind = opSel.dataset.kind === kind;
+        opSel.dataset.kind = kind;
         opSel.replaceChildren(...ops.map((o) => h('option', { value: o }, o)));
-        opSel.value = sameKind && ops.includes(prev) ? prev : col?.numeric ? '>' : 'contains';
+        opSel.value = sameKind && ops.includes(prev) ? prev : kind === 'date' ? 'after' : kind === 'number' ? '>' : 'contains';
         suggest.replaceChildren(...suggestValues(this.st.allRuns(), colSel.value).map((v) => h('option', { value: v })));
         syncOp();
       };
       const syncOp = () => {
         const op = opSel.value as FilterOp;
         expr.placeholder = op === 'between' ? 'e.g. 0.1..0.5' : op === 'regex' ? 'e.g. ^adam' : 'type or pick a value';
+        if (isDate()) valueBox.replaceChildren(from.el, ...(op === 'between' ? [andSep, to.el] : []));
+        else valueBox.replaceChildren(expr);
         err.textContent = '';
       };
       colSel.addEventListener('change', syncField);
       opSel.addEventListener('change', syncOp);
       const add = () => {
-        if (!expr.value.trim()) {
-          err.textContent = 'Enter a value';
-          return;
+        const op = opSel.value as FilterOp;
+        const date = isDate();
+        let built: string;
+        if (date) {
+          const a = from.value();
+          const b = to.value();
+          if (!a || (op === 'between' && !b)) {
+            err.textContent = op === 'between' ? 'Pick both dates' : 'Pick a date';
+            return;
+          }
+          built = op === 'between' ? `${a}..${b}` : buildFilterExpr(op, a);
+        } else {
+          if (!expr.value.trim()) {
+            err.textContent = 'Enter a value';
+            return;
+          }
+          built = buildFilterExpr(op, expr.value);
         }
-        const built = buildFilterExpr(opSel.value as FilterOp, expr.value);
-        const e = parseColumnFilter(built);
+        const e = parseColumnFilter(built, { date });
         if (e.error) {
           err.textContent = e.error;
           return;
@@ -405,9 +433,10 @@ export class Toolbar {
         render();
         body.querySelector<HTMLInputElement>('.cond-add input')?.focus();
       };
-      expr.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') add();
-      });
+      for (const el of [expr, ...from.el.children, ...to.el.children])
+        el.addEventListener('keydown', (e) => {
+          if ((e as KeyboardEvent).key === 'Enter') add();
+        });
       syncField();
       body.replaceChildren(
         h('div', { class: 'pop-title' }, 'Conditions'),
@@ -427,13 +456,13 @@ export class Toolbar {
                     render();
                   },
                 });
-                return h('div', { class: 'cond' }, h('span', { class: 'cond-field' }, c ? columnLabel(c) : id), h('code', { class: 'cond-expr', title: v }, describeFilter(v)), rm);
+                return h('div', { class: 'cond' }, h('span', { class: 'cond-field' }, c ? columnLabel(c) : id), h('code', { class: 'cond-expr', title: v }, describeFilter(v, { date: this.st.isDateColumn(id) })), rm);
               }),
             )
           : h('div', { class: 'muted pop-note' }, 'No column conditions yet.'),
-        h('div', { class: 'cond-add' }, colSel, opSel, expr, suggest, button({ label: 'Add', icon: 'plus', variant: 'primary', onClick: add })),
+        h('div', { class: 'cond-add' }, colSel, opSel, valueBox, suggest, button({ label: 'Add', icon: 'plus', variant: 'primary', onClick: add })),
         err,
-        h('div', { class: 'pop-help muted' }, 'Suggestions come from the values in your runs. Text matching ignores case; runs without a value never match. In the column filter inputs you can also type: > 0.8 · 0.1..0.5 · = adamw · != adamw · ~ adam (contains) · !~ adam (not contains) · /regex/'),
+        h('div', { class: 'pop-help muted' }, 'Suggestions come from the values in your runs. Text matching ignores case; runs without a value never match. In the column filter inputs you can also type: > 0.8 · 0.1..0.5 · = adamw · != adamw · ~ adam (contains) · !~ adam (not contains) · /regex/ · on date columns: < 2026-09-01 (before) · > 2026-09-01 08:00 (after) · = 2026-09-28 (that day) · 2026-09-01..2026-09-30. Dates without a time zone are local time.'),
         h('div', { class: 'pop-sep' }),
         toggle('Show filter inputs under column headers', this.st.s.showFilterRow, (v) => {
           this.st.s.showFilterRow = v;

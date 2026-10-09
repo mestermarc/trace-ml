@@ -155,7 +155,7 @@ export class RunTable {
       const input = h('input', {
         type: 'text',
         class: 'col-filter',
-        placeholder: c.numeric ? '> 0.8' : 'filter',
+        placeholder: this.st.isDateColumn(c.id) ? '> 2026-09-01' : c.numeric ? '> 0.8' : 'filter',
         value: this.st.s.filters.columns[c.id] ?? '',
         'aria-label': `Filter ${c.label}`,
         spellcheck: 'false',
@@ -175,9 +175,10 @@ export class RunTable {
         const v = input.value;
         if (v.trim()) this.st.s.filters.columns[c.id] = v;
         else delete this.st.s.filters.columns[c.id];
-        const err = parseColumnFilter(v).error;
+        const date = { date: this.st.isDateColumn(c.id) };
+        const err = parseColumnFilter(v, date).error;
         input.classList.toggle('invalid', err !== null);
-        input.title = err ?? (v.trim() ? describeFilter(v) : '');
+        input.title = err ?? (v.trim() ? describeFilter(v, date) : '');
         clearTimeout(this.filterTimer);
         this.filterTimer = setTimeout(() => this.st.changed('table', 'toolbar', 'plots', 'nav'), 150);
       });
@@ -321,7 +322,7 @@ export class RunTable {
     for (const inp of this.head.querySelectorAll<HTMLInputElement>('input.col-filter')) {
       const v = this.st.s.filters.columns[inp.dataset.filterCol ?? ''] ?? '';
       if (document.activeElement !== inp && inp.value !== v) inp.value = v;
-      inp.classList.toggle('invalid', parseColumnFilter(inp.value).error !== null);
+      inp.classList.toggle('invalid', parseColumnFilter(inp.value, { date: this.st.isDateColumn(inp.dataset.filterCol ?? '') }).error !== null);
     }
   }
 

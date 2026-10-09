@@ -1,5 +1,5 @@
 // Webview state: data received from the host plus persisted UI state (sort, filters, selection...).
-import { defaultVisibleColumns, differingParams, filterRuns, limitRows, moveColumn, pruneSelection, type FilterState } from '../model/filters';
+import { defaultVisibleColumns, differingParams, filterRuns, isDateColumn, limitRows, moveColumn, pruneSelection, type FilterState } from '../model/filters';
 export { MAX_ROWS_LIMIT, parseMaxRows } from '../model/filters';
 import { groupRuns, type RunGroup } from '../model/analysis';
 import type { XMode } from '../model/metricSeries';
@@ -161,7 +161,7 @@ export class AppState {
   private listeners = new Set<(areas: Set<Area>) => void>();
   private pending = new Set<Area>();
   private scheduled = false;
-  private cache: { all?: RunSummary[]; filtered?: RunSummary[]; sorted?: RunSummary[]; displayed?: RunSummary[]; columns?: ColumnDef[]; items?: TableItem[]; groups?: RunGroup[] } = {};
+  private cache: { all?: RunSummary[]; filtered?: RunSummary[]; sorted?: RunSummary[]; displayed?: RunSummary[]; columns?: ColumnDef[]; items?: TableItem[]; groups?: RunGroup[]; dateCols?: Map<string, boolean> } = {};
 
   constructor() {
     // Webview state survives hide/show; the host copy (VS Code workspace storage) survives closing
@@ -342,6 +342,14 @@ export class AppState {
     const c = this.availableColumns().find((x) => x.id === id);
     if (!c) return id;
     return c.kind === 'param' ? `config ${c.key}` : c.label;
+  }
+
+  /** True for date / date-time columns (timestamps, or fields whose values are all dates): date filters apply. */
+  isDateColumn(id: string): boolean {
+    const m = (this.cache.dateCols ??= new Map());
+    let v = m.get(id);
+    if (v === undefined) m.set(id, (v = isDateColumn(this.allRuns(), id)));
+    return v;
   }
 
   /** Numeric run-level fields usable as scatter axes / box values. */

@@ -1,6 +1,6 @@
 // Filtering, differing-param detection, default column choice and selection helpers. Pure.
 import type { DisplayStatus, RunSummary, Scalar } from '../types';
-import { FIXED_COLUMNS, columnId, columnValue, dynamicColumns, valuesDiffer } from './run';
+import { FIXED_COLUMNS, columnId, columnValue, dynamicColumns, parseColumnId, valuesDiffer } from './run';
 
 export interface ColumnFilter {
   test: (v: Scalar) => boolean;
@@ -24,16 +24,140 @@ function asNumber(v: Scalar): number | null {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Dates
+// ---------------------------------------------------------------------------
+
+/** Fixed columns holding timestamps (ms since the epoch). */
+const TIME_COLUMNS = new Set(['started', 'ended', 'heartbeat']);
+
+/**
+ * A date or date-time as typed or logged: `2026-09`, `2026-09-28`, `2026-09-28 14:30`,
+ * `2026-09-28T14:30:05.123`, optionally with `Z` / `+02:00` (only after a time).
+ */
+const DATE_RE = /^(\d{4})-(\d{1,2})(?:-(\d{1,2})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3})\d*)?)?\s*(Z|[+-]\d{2}(?::?\d{2})?)?)?)?$/i;
+const DATE_CMP_RE = /^(>=|<=|!=|==|=|>|<)\s*(\d{4}-.*)$/;
+const DATE_RANGE_RE = /^(\d{4}-.*?)\s*\.\.\s*(\d{4}-.*)$/;
+
+/**
+ * The time span a date literal stands for, [start, end) in ms: a day for `2026-09-28`, a minute
+ * for `2026-09-28 14:30`, a month for `2026-09`. Without an offset it is local time (as the table
+ * shows times); `Z` / `+hh:mm` make it absolute. null when not a valid date.
+ */
+export function parseDateLiteral(text: string): { start: number; end: number } | null {
+  const m = DATE_RE.exec(text.trim());
+  if (!m) return null;
+  const [y, mo, d, hh, mi, ss, ms] = [1, 2, 3, 4, 5, 6, 7].map((i) => (m[i] === undefined ? undefined : Number(m[i]!.padEnd(i === 7 ? 3 : 1, '0'))));
+  const tz = m[8];
+  const parts = [y!, mo! - 1, d ?? 1, hh ?? 0, mi ?? 0, ss ?? 0, ms ?? 0] as const;
+  // the least significant unit given sets the span's length
+  const unit = ms !== undefined ? 6 : ss !== undefined ? 5 : mi !== undefined ? 4 : d !== undefined ? 2 : 1;
+  const next = parts.map((v, i) => (i === unit ? v + 1 : v)) as unknown as typeof parts;
+  let start: number;
+  let end: number;
+  if (tz) {
+    const off = /^z$/i.test(tz) ? 0 : (tz[0] === '-' ? -1 : 1) * (Number(tz.slice(1, 3)) * 60 + Number(tz.replace(':', '').slice(3, 5) || 0)) * 60000;
+    start = Date.UTC(...parts) - off;
+    end = Date.UTC(...next) - off;
+    const check = new Date(start + off);
+    if (check.getUTCMonth() !== parts[1] || check.getUTCDate() !== parts[2] || check.getUTCHours() !== parts[3] || check.getUTCMinutes() !== parts[4]) return null;
+  } else {
+    const a = new Date(...parts);
+    start = a.getTime();
+    end = new Date(...next).getTime();
+    // rejects 2026-02-30, 25:00 and the like (Date rolls them over)
+    if (a.getMonth() !== parts[1] || a.getDate() !== parts[2] || (hh !== undefined && (hh > 23 || mi! > 59 || (ss ?? 0) > 59))) return null;
+  }
+  return Number.isFinite(start) && Number.isFinite(end) ? { start, end } : null;
+}
+
+/** A cell's value as a timestamp (ms): timestamps as they are, date strings by parseDateLiteral. */
+export function dateValue(v: Scalar): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v === 'string') return parseDateLiteral(v)?.start ?? null;
+  return null;
+}
+
+/**
+ * True for date / date-time columns: the started / ended / heartbeat timestamps, and config or
+ * summary fields whose values (all of them, at least one) are date strings.
+ */
+export function isDateColumn(runs: readonly RunSummary[], colId: string): boolean {
+  const { kind, key } = parseColumnId(colId);
+  if (kind === 'fixed') return TIME_COLUMNS.has(key);
+  if (kind !== 'param' && kind !== 'summary') return false;
+  let seen = false;
+  for (const r of runs) {
+    const v = columnValue(r, colId);
+    if (v === null || v === '') continue;
+    if (typeof v !== 'string' || !parseDateLiteral(v)) return false;
+    seen = true;
+  }
+  return seen;
+}
+
+/**
+ * Date conditions (date columns only): `< d` before, `> d` after, `= d` on (within the span of
+ * d, e.g. that day), `!= d`, `<= d` / `>= d` (on or before / after) and `d1..d2` (from the start
+ * of d1 to the end of d2). null when the expression is not a date condition.
+ */
+function parseDateFilter(e: string): ColumnFilter | null {
+  const span = (text: string) => parseDateLiteral(text);
+  const bad = (text: string): ColumnFilter => ({ test: () => true, error: `not a valid date: ${text.trim()} (use YYYY-MM-DD or YYYY-MM-DD HH:MM)` });
+  const range = DATE_RANGE_RE.exec(e);
+  if (range) {
+    const a = span(range[1]!);
+    const b = span(range[2]!);
+    if (!a) return bad(range[1]!);
+    if (!b) return bad(range[2]!);
+    const lo = Math.min(a.start, b.start);
+    const hi = Math.max(a.end, b.end);
+    return { error: null, test: (v) => inSpan(v, lo, hi) };
+  }
+  const cmp = DATE_CMP_RE.exec(e);
+  const bare = cmp ? null : span(e);
+  if (!cmp && !bare) return null;
+  const op = cmp ? cmp[1]! : '=';
+  const s = cmp ? span(cmp[2]!) : bare;
+  if (!s) return bad(cmp![2]!);
+  switch (op) {
+    case '<':
+      return { error: null, test: (v) => inSpan(v, -Infinity, s.start) };
+    case '<=':
+      return { error: null, test: (v) => inSpan(v, -Infinity, s.end) };
+    case '>':
+      return { error: null, test: (v) => inSpan(v, s.end, Infinity) };
+    case '>=':
+      return { error: null, test: (v) => inSpan(v, s.start, Infinity) };
+    case '!=':
+      return { error: null, test: (v) => dateValue(v) !== null && !inSpan(v, s.start, s.end) };
+    default:
+      return { error: null, test: (v) => inSpan(v, s.start, s.end) };
+  }
+}
+
+/** True when the cell is a date within [lo, hi). */
+function inSpan(v: Scalar, lo: number, hi: number): boolean {
+  const t = dateValue(v);
+  return t !== null && t >= lo && t < hi;
+}
+
 /**
  * Parses a per-column filter expression.
  *   numeric:  `> 0.8`, `<= 1e-3`, `0.1..0.5`, `!= 0`, `= 64`, or a bare number (equality)
  *   text:     `= adamw` / `!= adamw` (exact), `~ adam` (contains), `!~ adam` (does not contain),
  *             a bare `substring` (contains) or `/regex/flags`
+ *   dates:    (with `date`: date columns) `< 2026-09-01`, `>= 2026-09-01 08:00`, `= 2026-09-28`,
+ *             `2026-09-01..2026-09-30`, a bare date; other expressions work as for any column
  * All text matching is case-insensitive. Null (missing) cells only match the empty expression.
  */
-export function parseColumnFilter(expr: string): ColumnFilter {
+export function parseColumnFilter(expr: string, opts: { date?: boolean } = {}): ColumnFilter {
   const e = expr.trim();
   if (e === '') return ALL;
+  if (opts.date) {
+    const d = parseDateFilter(e);
+    if (d) return d;
+  }
 
   const re = /^\/(.*)\/([a-z]*)$/.exec(e);
   if (re) {
@@ -115,13 +239,18 @@ export function parseColumnFilter(expr: string): ColumnFilter {
 }
 
 /** Operators offered by the filter builder. */
-export type FilterOp = '=' | '!=' | '>' | '>=' | '<' | '<=' | 'between' | 'contains' | 'not contains' | 'regex';
+export type FilterOp = '=' | '!=' | '>' | '>=' | '<' | '<=' | 'between' | 'contains' | 'not contains' | 'regex' | DateOp;
+export type DateOp = 'on' | 'not on' | 'before' | 'after' | 'on or before' | 'on or after';
 export const NUMERIC_OPS: readonly FilterOp[] = ['=', '!=', '>', '>=', '<', '<=', 'between', 'contains', 'not contains'];
 export const TEXT_OPS: readonly FilterOp[] = ['=', '!=', 'contains', 'not contains', 'regex'];
+export const DATE_OPS: readonly FilterOp[] = ['on', 'not on', 'before', 'after', 'on or before', 'on or after', 'between'];
+const DATE_OP_EXPR: Record<DateOp, string> = { on: '=', 'not on': '!=', before: '<', after: '>', 'on or before': '<=', 'on or after': '>=' };
+const DATE_EXPR_OP: Record<string, DateOp> = { '=': 'on', '==': 'on', '!=': 'not on', '<': 'before', '>': 'after', '<=': 'on or before', '>=': 'on or after' };
 
 /** Builds the stored expression for an operator and a value (the inverse of describeFilter). */
 export function buildFilterExpr(op: FilterOp, value: string): string {
   const v = value.trim();
+  if (op in DATE_OP_EXPR) return `${DATE_OP_EXPR[op as DateOp]} ${v}`;
   switch (op) {
     case 'contains':
       return `~ ${v}`;
@@ -138,9 +267,18 @@ export function buildFilterExpr(op: FilterOp, value: string): string {
   }
 }
 
-/** Human-readable form of an expression, for chips and lists: `~ adam` -> `contains adam`. */
-export function describeFilter(expr: string): string {
+/**
+ * Human-readable form of an expression, for chips and lists: `~ adam` -> `contains adam`;
+ * on date columns `< 2026-09-01` -> `before 2026-09-01`.
+ */
+export function describeFilter(expr: string, opts: { date?: boolean } = {}): string {
   const e = expr.trim();
+  if (opts.date && parseDateFilter(e)?.error === null) {
+    const r = DATE_RANGE_RE.exec(e);
+    if (r) return `between ${r[1]!.trim()} and ${r[2]!.trim()}`;
+    const c = DATE_CMP_RE.exec(e);
+    return c ? `${DATE_EXPR_OP[c[1]!]} ${c[2]!.trim()}` : `on ${e}`;
+  }
   const c = CONTAINS_RE.exec(e);
   if (c && !/^\/.*\/[a-z]*$/.test(e)) return `${c[1] ? 'not contains' : 'contains'} ${c[2]!.trim()}`;
   if (RANGE_RE.test(e)) return `between ${e.replace(/\s*\.\.\s*/, ' and ')}`;
@@ -154,16 +292,25 @@ export function describeFilter(expr: string): string {
  */
 export function suggestValues(runs: readonly RunSummary[], colId: string, limit = 50): string[] {
   const counts = new Map<string, number>();
+  // timestamps are suggested as (local) days, the way dates are typed
+  const asDay = parseColumnId(colId).kind === 'fixed' && TIME_COLUMNS.has(colId);
   for (const r of runs) {
     const v = columnValue(r, colId);
     if (v === null || v === '' || (typeof v === 'number' && !Number.isFinite(v))) continue;
-    for (const part of colId === 'tags' ? r.tags : [String(v)]) counts.set(part, (counts.get(part) ?? 0) + 1);
+    for (const part of colId === 'tags' ? r.tags : [asDay && typeof v === 'number' ? localDay(v) : String(v)]) counts.set(part, (counts.get(part) ?? 0) + 1);
   }
   const natural = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
   return [...counts]
     .sort((a, b) => b[1] - a[1] || natural.compare(a[0], b[0]))
     .slice(0, limit)
     .map(([v]) => v);
+}
+
+/** `YYYY-MM-DD` of a timestamp in local time. */
+export function localDay(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 /** Free-text search over id / name / group / tags. Every whitespace-separated term must match. */
@@ -186,7 +333,7 @@ export function filterRuns(runs: readonly RunSummary[], f: FilterState): RunSumm
   const statuses = new Set(f.statuses);
   const colFilters = Object.entries(f.columns)
     .filter(([, expr]) => expr.trim() !== '')
-    .map(([col, expr]) => ({ col, filter: parseColumnFilter(expr) }))
+    .map(([col, expr]) => ({ col, filter: parseColumnFilter(expr, { date: isDateColumn(runs, col) }) }))
     .filter((c) => c.filter.error === null);
   return runs.filter(
     (r) =>
