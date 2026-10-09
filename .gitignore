@@ -22,6 +22,7 @@ __pycache__/
 .env.*
 02-TraceML-viewer.md
 03-TraceML-modern-ui.md
+04-TraceML-simple-table-export-prompt.md
 # OS / editor noise
 .DS_Store
 Thumbs.db
