@@ -2,7 +2,23 @@
 // Scatter, Box and Bar charts of the filtered runs. Each section is collapsible and remembers
 // its state. Run-level charts use only data already in the webview (params + metrics.json
 // summaries); they never request metrics.jsonl histories.
-import { barData, boxData, logTicks, niceTicks, NONE_GROUP, scatterData, type BarData, type BoxData, type ScatterData } from '../model/analysis';
+import {
+  AUTO_LIMITS,
+  axisLimitsError,
+  barData,
+  boxData,
+  isAutoLimits,
+  logTicks,
+  niceTicks,
+  NONE_GROUP,
+  parseAxisLimit,
+  scatterData,
+  withinLimits,
+  type AxisLimits,
+  type BarData,
+  type BoxData,
+  type ScatterData,
+} from '../model/analysis';
 import { scatterGroupMeans, stats, type GroupPoint } from '../model/groupAgg';
 import { barCsv, boxCsv, scatterCsv, scatterGroupCsv } from '../model/plotData';
 import { parseColumnId } from '../model/run';
@@ -14,6 +30,7 @@ import type { AppState, Area } from './state';
 import { button, emptyState, icon, searchSelect, toggle, type PickItem } from './ui';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
+let clipSeq = 0;
 const CHART_H = 360;
 const M = { l: 70, r: 18, t: 14, b: 46 };
 const BAR_ROW = 24;
@@ -43,7 +60,12 @@ interface Scale {
   valid: (v: number) => boolean;
 }
 
-function makeScale(values: number[], lo: number, hi: number, log: boolean, includeZero = false): Scale {
+/**
+ * `limits`: manual bounds (already validated); a set bound is used exactly, an automatic one fits
+ * the values inside the other bound (with the usual 5% padding).
+ */
+function makeScale(values: number[], lo: number, hi: number, log: boolean, includeZero = false, limits: AxisLimits = AUTO_LIMITS): Scale {
+  if (!isAutoLimits(limits)) values = values.filter((v) => withinLimits(v, limits));
   if (log) {
     const pos = values.filter((v) => v > 0);
     let min = pos.length ? Math.min(...pos) : 1;
@@ -52,9 +74,21 @@ function makeScale(values: number[], lo: number, hi: number, log: boolean, inclu
       min /= 2;
       max *= 2;
     }
-    const a = Math.log10(min) - 0.05 * (Math.log10(max) - Math.log10(min));
-    const b = Math.log10(max) + 0.05 * (Math.log10(max) - Math.log10(min));
+    let a = limits.min !== null ? Math.log10(limits.min) : Math.log10(min) - 0.05 * (Math.log10(max) - Math.log10(min));
+    let b = limits.max !== null ? Math.log10(limits.max) : Math.log10(max) + 0.05 * (Math.log10(max) - Math.log10(min));
+    if (a >= b) {
+      if (limits.max === null) b = a + 1;
+      else a = b - 1;
+    }
     return { map: (v) => lo + ((Math.log10(v) - a) / (b - a)) * (hi - lo), ticks: logTicks(10 ** a, 10 ** b), valid: (v) => v > 0 };
+  }
+  if (!isAutoLimits(limits)) {
+    let a = limits.min ?? (values.length ? Math.min(...values) : limits.max! - 1);
+    let b = limits.max ?? (values.length ? Math.max(...values) : limits.min! + 1);
+    const pad = (b - a) * 0.05 || Math.abs(a) * 0.1 || 1;
+    if (limits.min === null) a -= pad;
+    if (limits.max === null) b += pad;
+    return { map: (v) => lo + ((v - a) / (b - a)) * (hi - lo), ticks: niceTicks(a, b, 6).filter((t) => t >= a && t <= b), valid: () => true };
   }
   let min = values.length ? Math.min(...values) : 0;
   let max = values.length ? Math.max(...values) : 1;
@@ -234,7 +268,9 @@ export class Analysis {
     const a = this.st.s.analysis;
     const numeric = this.st.numericFields();
     const groups = this.st.groupFields();
-    const key = JSON.stringify([a, r, numeric.map((f) => f.id), groups.map((f) => f.id), this.st.s.groupBy]);
+    // Axis limits are left out: their inputs update the chart while typing, and rebuilding the
+    // controls would take the focus away. Changing an axis field resets them (and rebuilds).
+    const key = JSON.stringify([{ ...a, xLimits: null, yLimits: null }, r, numeric.map((f) => f.id), groups.map((f) => f.id), this.st.s.groupBy]);
     if (key === c.controlsKey) return;
     c.controlsKey = key;
 
@@ -268,14 +304,15 @@ export class Analysis {
 
     if (c.kind === 'scatter') {
       c.controls.replaceChildren(
-        pick('X', fieldItems(numeric), r.x ?? '', (v) => set({ x: v })),
-        button({ icon: 'refresh', title: 'Swap X and Y', variant: 'ghost', onClick: () => set({ x: r.y, y: r.x }) }),
-        pick('Y', fieldItems(numeric), r.y ?? '', (v) => set({ y: v })),
+        pick('X', fieldItems(numeric), r.x ?? '', (v) => set(v === r.x ? {} : { x: v, xLimits: AUTO_LIMITS })),
+        button({ icon: 'refresh', title: 'Swap X and Y', variant: 'ghost', onClick: () => set({ x: r.y, y: r.x, xLimits: a.yLimits, yLimits: a.xLimits }) }),
+        pick('Y', fieldItems(numeric), r.y ?? '', (v) => set(v === r.y ? {} : { y: v, yLimits: AUTO_LIMITS })),
         pick('Size', fieldItems(numeric, 'none'), r.size ?? '', (v) => set({ size: v || null })),
         pick('Color', groupOpts(), a.color ?? '', (v) => set({ color: v || null }), 'Colour points by a categorical field'),
         byGroupsToggle(a.scatterByGroups, !!r.color, (v) => set({ scatterByGroups: v }), 'One point per Color group at the mean of its runs (bars: ±1 standard deviation)', 'Choose a Color field (or group the table) to plot group means'),
         toggle('Log X', a.logX, (v) => set({ logX: v })),
         toggle('Log Y', a.logY, (v) => set({ logY: v })),
+        this.axisLimitControls(),
       );
     } else if (c.kind === 'box') {
       c.controls.replaceChildren(
@@ -293,6 +330,95 @@ export class Analysis {
         toggle('Start at zero', a.bar.zero, (v) => setBar({ zero: v }), 'Bars start at 0 (off: the axis fits the data range)'),
       );
     }
+  }
+
+  /**
+   * Scatter X / Y range inputs (empty = automatic). Valid limits apply while typing; invalid ones
+   * (not a number, min ≥ max, ≤ 0 on a log axis) are flagged and leave the chart unchanged.
+   */
+  private axisLimitControls(): HTMLElement {
+    const a = this.st.s.analysis;
+    const err = h('span', { class: 'field-error', role: 'alert' });
+    const input = (axis: string, bound: 'min' | 'max', v: number | null) =>
+      h('input', { type: 'text', class: 'limit-input', inputmode: 'decimal', placeholder: bound, spellcheck: 'false', autocomplete: 'off', 'aria-label': `${axis} axis ${bound}`, title: `${axis} axis ${bound} (empty = automatic)`, value: v === null ? '' : String(v) });
+    const axes = (['x', 'y'] as const).map((axis) => {
+      const key = axis === 'x' ? ('xLimits' as const) : ('yLimits' as const);
+      const label = axis.toUpperCase();
+      return { label, key, log: () => (axis === 'x' ? this.st.s.analysis.logX : this.st.s.analysis.logY), lo: input(label, 'min', a[key].min), hi: input(label, 'max', a[key].max) };
+    });
+    const apply = (commit: boolean) => {
+      const msgs: string[] = [];
+      const patch: Partial<Record<'xLimits' | 'yLimits', AxisLimits>> = {};
+      for (const ax of axes) {
+        const min = parseAxisLimit(ax.lo.value);
+        const max = parseAxisLimit(ax.hi.value);
+        ax.lo.classList.toggle('invalid', min === undefined);
+        ax.hi.classList.toggle('invalid', max === undefined);
+        if (min === undefined || max === undefined) {
+          msgs.push(`${ax.label}: enter a number, or leave empty for automatic`);
+          continue;
+        }
+        const lim = { min, max };
+        const e = axisLimitsError(lim, ax.log());
+        if (e) {
+          ax.lo.classList.add('invalid');
+          ax.hi.classList.add('invalid');
+          msgs.push(`${ax.label}: ${e}`);
+          continue;
+        }
+        if (commit) {
+          ax.lo.value = min === null ? '' : String(min);
+          ax.hi.value = max === null ? '' : String(max);
+        }
+        const cur = this.st.s.analysis[ax.key];
+        if (cur.min !== min || cur.max !== max) patch[ax.key] = lim;
+      }
+      err.textContent = msgs.join(' · ');
+      if (Object.keys(patch).length) {
+        Object.assign(this.st.s.analysis, patch);
+        this.st.changed('plots');
+      }
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    for (const el of axes.flatMap((ax) => [ax.lo, ax.hi])) {
+      el.addEventListener('input', () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => apply(false), 250);
+      });
+      el.addEventListener('change', () => {
+        clearTimeout(timer);
+        apply(true);
+      });
+    }
+    const reset = button({
+      label: 'Auto',
+      title: 'Reset both axes to automatic scaling',
+      variant: 'ghost',
+      onClick: () => {
+        for (const ax of axes) ax.lo.value = ax.hi.value = '';
+        apply(true);
+      },
+    });
+    apply(false); // flags saved limits that no longer fit (e.g. after turning on a log axis)
+    return h(
+      'div',
+      { class: 'axis-limits', role: 'group', 'aria-label': 'Axis limits' },
+      ...axes.flatMap((ax) => [h('span', { class: 'field-label' }, `${ax.label} range`), ax.lo, h('span', { class: 'muted' }, '–'), ax.hi]),
+      reset,
+      err,
+    );
+  }
+
+  /** Scatter limits to draw with: the saved ones, or automatic when they don't fit the axis. */
+  private effectiveLimits(): { x: AxisLimits; y: AxisLimits; ignored: string[] } {
+    const a = this.st.s.analysis;
+    const ignored: string[] = [];
+    const pick = (l: AxisLimits, log: boolean, label: string) => {
+      if (!axisLimitsError(l, log)) return l;
+      ignored.push(label);
+      return AUTO_LIMITS;
+    };
+    return { x: pick(a.xLimits, a.logX, 'X'), y: pick(a.yLimits, a.logY, 'Y'), ignored };
   }
 
   // -- rendering -----------------------------------------------------------------------
@@ -452,10 +578,15 @@ export class Analysis {
     // with group means, the axes also cover the ±1 std whiskers
     const spanX = byGroups ? data.points.flatMap((p) => [p.x - gp(p).sx, p.x + gp(p).sx]) : data.points.map((p) => p.x);
     const spanY = byGroups ? data.points.flatMap((p) => [p.y - gp(p).sy, p.y + gp(p).sy]) : data.points.map((p) => p.y);
-    const xs = makeScale(spanX, M.l, w - M.r, logX);
-    const ys = makeScale(spanY, CHART_H - M.b, M.t, logY);
-    const pts = data.points.filter((p) => xs.valid(p.x) && ys.valid(p.y));
-    const logDropped = data.points.length - pts.length;
+    const lim = this.effectiveLimits();
+    const xs = makeScale(spanX, M.l, w - M.r, logX, false, lim.x);
+    const ys = makeScale(spanY, CHART_H - M.b, M.t, logY, false, lim.y);
+    const plottable = data.points.filter((p) => xs.valid(p.x) && ys.valid(p.y));
+    const logDropped = data.points.length - plottable.length;
+    // Manual limits hide the points outside the range (the data itself is unchanged).
+    const pts = plottable.filter((p) => withinLimits(p.x, lim.x) && withinLimits(p.y, lim.y));
+    const clipped = plottable.length - pts.length;
+    const limited = !isAutoLimits(lim.x) || !isAutoLimits(lim.y);
     const sizes = pts.map((p) => p.size).filter((v): v is number => v !== null);
     const sMin = Math.min(...sizes);
     const sMax = Math.max(...sizes);
@@ -468,6 +599,14 @@ export class Analysis {
     const rows = new Map<string, string[]>();
     const xFmt = formatterFor(xf);
     const yFmt = formatterFor(yf);
+    // Marks are clipped to the plot area (group whiskers can reach past manual limits).
+    let marks: SVGElement = svg;
+    if (limited) {
+      const id = `scatter-clip-${++clipSeq}`;
+      svg.append(s('defs', {}, s('clipPath', { id }, s('rect', { x: M.l, y: M.t, width: Math.max(0, w - M.l - M.r), height: CHART_H - M.t - M.b }))));
+      marks = s('g', { 'clip-path': `url(#${id})` });
+      svg.append(marks);
+    }
     // Larger points first so small ones stay clickable on top.
     for (const p of [...pts].sort((a, b) => radius(b.size) - radius(a.size))) {
       const color = colors[p.group !== null ? (colorOf.get(p.group) ?? 0) : 0]!;
@@ -479,7 +618,7 @@ export class Analysis {
         const cy = ys.map(p.y);
         const clampX = (v: number) => (xs.valid(v) ? xs.map(v) : cx);
         const clampY = (v: number) => (ys.valid(v) ? ys.map(v) : cy);
-        svg.append(
+        marks.append(
           s('line', { x1: clampX(p.x - sx), x2: clampX(p.x + sx), y1: cy, y2: cy, stroke: color, 'stroke-width': 1.5, opacity: 0.8 }),
           s('line', { x1: cx, x2: cx, y1: clampY(p.y - sy), y2: clampY(p.y + sy), stroke: color, 'stroke-width': 1.5, opacity: 0.8 }),
           s('circle', { cx, cy, r: 7, fill: withAlpha(color, 0.85), stroke: fg, 'stroke-width': 1.5, 'data-key': p.key, class: 'pt' }),
@@ -487,7 +626,7 @@ export class Analysis {
         rows.set(p.key, [`${p.name} — mean of ${n} run${n === 1 ? '' : 's'}`, `${this.st.fieldLabel(xf)}: ${xFmt(p.x)} ± ${xFmt(sx)}`, `${this.st.fieldLabel(yf)}: ${yFmt(p.y)} ± ${yFmt(sy)}`]);
         continue;
       }
-      svg.append(
+      marks.append(
         s('circle', {
           cx: xs.map(p.x),
           cy: ys.map(p.y),
@@ -506,13 +645,20 @@ export class Analysis {
     }
     this.mountSvg(c, svg, rows, (key) => !key.startsWith('group:'));
     const excluded = data.excluded + logDropped;
+    const limitNotes = [
+      clipped ? `${clipped} ${byGroups ? 'group mean' : 'run'}${clipped === 1 ? '' : 's'} outside the axis limits` : '',
+      lim.ignored.length ? `${lim.ignored.join(' and ')} limits ignored (invalid for this axis)` : '',
+    ]
+      .filter(Boolean)
+      .map((n) => ` · ${n}`)
+      .join('');
     if (byGroups) {
       const n = pts.reduce((a, p) => a + gp(p).n, 0);
-      c.info.textContent = `${pts.length} group mean${pts.length === 1 ? '' : 's'} of ${n} runs (±1 standard deviation)${data.excluded ? ` · ${data.excluded} runs excluded (missing or non-numeric)` : ''}`;
+      c.info.textContent = `${pts.length} group mean${pts.length === 1 ? '' : 's'} of ${n} runs (±1 standard deviation)${data.excluded ? ` · ${data.excluded} runs excluded (missing or non-numeric)` : ''}${limitNotes}`;
       this.renderGroupLegend(c, data.groups, colorOf, colorF);
       return;
     }
-    c.info.textContent = `${pts.length} of ${total} filtered runs plotted${excluded ? ` · ${excluded} excluded (missing, non-numeric${logDropped ? ' or ≤ 0 on a log axis' : ''})` : ''} · click a point to open the run`;
+    c.info.textContent = `${pts.length} of ${total} filtered runs plotted${excluded ? ` · ${excluded} excluded (missing, non-numeric${logDropped ? ' or ≤ 0 on a log axis' : ''})` : ''}${limitNotes} · click a point to open the run`;
     this.renderGroupLegend(c, colorF ? data.groups : [], colorOf, colorF);
   }
 
