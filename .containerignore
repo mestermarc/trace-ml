@@ -1,0 +1,8 @@
+node_modules/
+dist/
+test-data/
+traceml/
+*.vsix
+.git/
+**/__pycache__/
+.venv/

@@ -1,0 +1,56 @@
+# TraceML dev container: Ubuntu 24.04 + Python 3.12 + uv + Node 22, run as non-root "beta".
+#
+# Build (from the repo root):   podman build -t traceml-dev -f container/Containerfile .
+# Or just use:                  .\container\traceml.ps1 build
+
+ARG UV_VERSION=0.8.17
+
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
+
+FROM docker.io/library/ubuntu:24.04
+
+ARG NODE_MAJOR=22
+ARG USERNAME=beta
+ARG USER_UID=1000
+ARG USER_GID=1000
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
+# System packages: Python, build basics, git, and Node from NodeSource (package.json needs node >=20).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl gnupg git sudo less nano \
+      python3 python3-venv python3-pip \
+ && curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
+ && apt-get install -y --no-install-recommends nodejs \
+ && rm -rf /var/lib/apt/lists/*
+
+# uv / uvx binaries, copied from Astral's official image (pinned by UV_VERSION).
+COPY --from=uv /uv /uvx /usr/local/bin/
+
+# Ubuntu 24.04 ships a default "ubuntu" user on UID 1000; remove it so "beta" can take that UID
+# (UID 1000 matches the default user inside the Podman machine, so bind-mounted files line up).
+RUN if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi \
+ && groupadd --gid ${USER_GID} ${USERNAME} \
+ && useradd --uid ${USER_UID} --gid ${USER_GID} --create-home --shell /bin/bash ${USERNAME}
+
+# Optional: allow beta to apt-get install things without a password. Delete this line to make
+# the container strictly non-root.
+RUN echo "${USERNAME} ALL=(root) NOPASSWD: /usr/bin/apt-get" > /etc/sudoers.d/${USERNAME} \
+ && chmod 0440 /etc/sudoers.d/${USERNAME}
+
+USER ${USERNAME}
+WORKDIR /home/${USERNAME}/trace-ml
+
+# Keep uv's cache and any virtualenv out of the bind-mounted Windows checkout.
+ENV UV_CACHE_DIR=/home/${USERNAME}/.cache/uv \
+    UV_PROJECT_ENVIRONMENT=/home/${USERNAME}/.venv \
+    UV_LINK_MODE=copy \
+    PATH=/home/${USERNAME}/.local/bin:${PATH}
+
+# Pre-create mount targets so named volumes are owned by beta rather than root.
+RUN mkdir -p /home/${USERNAME}/trace-ml/node_modules /home/${USERNAME}/.cache/uv /home/${USERNAME}/.claude
+
+CMD ["bash", "-l"]
