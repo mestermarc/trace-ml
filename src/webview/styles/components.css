@@ -2447,3 +2447,20 @@ tr.cmp-section th {
   color: var(--tm-text-muted);
   font-style: normal;
 }
+
+/* scatter axis limits */
+.axis-limits {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--tm-space-2);
+}
+
+.limit-input {
+  width: 72px;
+}
+
+.limit-input.invalid {
+  border-color: var(--tm-error) !important;
+  outline-color: var(--tm-error);
+}

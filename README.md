@@ -311,6 +311,7 @@ TraceML uses a dark-only application shell with its own design system, inside a 
       - Runs with missing, `null`, NaN, non-numeric or (on a log axis) ≤ 0 values are left out, and the count is shown.
       - Hover over a point for its values; click it to open the run.
       - **Plot by groups** (needs a Color field or a table grouping): one point per group at the mean X and Y, with ±1 standard deviation whiskers.
+      - **X range / Y range** set the axis limits by hand: type a min, a max or both (empty = automatic; *Auto* resets both axes). Points outside the range are hidden from the chart (the count is shown) but stay in the data and the CSV export. Invalid limits (not a number, min ≥ max, ≤ 0 on a log axis) are flagged and not applied. Limits are remembered, and reset when you pick another X or Y field.
     - **Box** (all filtered runs): one box per group, showing the quartiles, the median, and whiskers reaching to 1.5 × IQR. **Plot by groups** adds the group mean (◆). Every run is drawn as a jittered point, with outliers hollow. Hover for details, or click a point to open the run.
     - **Bar** (all filtered runs, run-level data only):
       - *One per run* draws horizontal bars, colored by the Group field if one is set, with at most 60 bars; filter to narrow down. Click a bar to open the run.

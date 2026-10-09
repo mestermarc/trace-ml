@@ -1,7 +1,7 @@
 // Webview state: data received from the host plus persisted UI state (sort, filters, selection...).
 import { defaultVisibleColumns, differingParams, filterRuns, limitRows, moveColumn, pruneSelection, type FilterState } from '../model/filters';
 export { MAX_ROWS_LIMIT, parseMaxRows } from '../model/filters';
-import { groupRuns, type RunGroup } from '../model/analysis';
+import { groupRuns, type AxisLimits, type RunGroup } from '../model/analysis';
 import type { XMode } from '../model/metricSeries';
 import { dynamicColumns, sortRuns, type ColumnDef, type SortKey, FIXED_COLUMNS, OPTIONAL_FIXED_COLUMNS, parseColumnId } from '../model/run';
 import type { HiddenRun } from '../model/hiddenRuns';
@@ -69,6 +69,9 @@ export interface PersistedState {
     boxGroup: string | null;
     logX: boolean;
     logY: boolean;
+    /** Manual scatter axis ranges (null bound = automatic); reset when the axis field changes. */
+    xLimits: AxisLimits;
+    yLimits: AxisLimits;
     boxLogY: boolean;
     bar: {
       field: string | null;
@@ -120,6 +123,8 @@ const DEFAULT_STATE: PersistedState = {
     boxGroup: 'auto',
     logX: false,
     logY: false,
+    xLimits: { min: null, max: null },
+    yLimits: { min: null, max: null },
     boxLogY: false,
     bar: { field: null, group: 'auto', mode: 'runs', sort: 'desc', zero: true },
     scatterByGroups: false,

@@ -260,6 +260,38 @@ export function barData(
 // Axis helpers (shared by the SVG charts)
 // ---------------------------------------------------------------------------
 
+/** Manual axis range; a null bound is automatic (fits the data). */
+export interface AxisLimits {
+  min: number | null;
+  max: number | null;
+}
+
+export const AUTO_LIMITS: AxisLimits = { min: null, max: null };
+
+/** Parses an axis limit input: '' = automatic (null), a finite number, or undefined when invalid. */
+export function parseAxisLimit(text: string): number | null | undefined {
+  const t = text.trim();
+  if (!t || t.toLowerCase() === 'auto') return null;
+  const v = Number(t);
+  return Number.isFinite(v) ? v : undefined;
+}
+
+/** Why a pair of limits cannot be used (min ≥ max, ≤ 0 on a log axis), or null when they are fine. */
+export function axisLimitsError(l: AxisLimits, log: boolean): string | null {
+  if (l.min !== null && l.max !== null && l.min >= l.max) return 'min must be less than max';
+  if (log && ((l.min !== null && l.min <= 0) || (l.max !== null && l.max <= 0))) return 'limits must be > 0 on a log axis';
+  return null;
+}
+
+/** True when a value lies inside the (possibly half-open) limits. */
+export function withinLimits(v: number, l: AxisLimits): boolean {
+  return (l.min === null || v >= l.min) && (l.max === null || v <= l.max);
+}
+
+export function isAutoLimits(l: AxisLimits): boolean {
+  return l.min === null && l.max === null;
+}
+
 /** "Nice" tick values covering [min, max] (linear scale). */
 export function niceTicks(min: number, max: number, count = 5): number[] {
   if (!Number.isFinite(min) || !Number.isFinite(max)) return [];
