@@ -1,24 +1,21 @@
-
 {
   "name": "TraceML (Podman)",
   "build": {
     "dockerfile": "../container/Containerfile",
-    "context": ".."
+    "context": "..",
+    "args": { "USERNAME": "dev" }
   },
   "features": {
     "ghcr.io/anthropics/devcontainer-features/claude-code:1": {}
   },
-  "remoteUser": "beta",
-  "workspaceFolder": "/home/beta/trace-ml",
-  "workspaceMount": "source=${localWorkspaceFolder},target=/home/beta/trace-ml,type=bind",
+  "remoteUser": "dev",
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
   "mounts": [
-    "source=traceml-node-modules,target=/home/beta/trace-ml/node_modules,type=volume",
-    "source=traceml-uv-cache,target=/home/beta/.cache/uv,type=volume",
-    "source=traceml-claude-config,target=/home/beta/.claude,type=volume"
+    "source=traceml-node-modules,target=/workspace/node_modules,type=volume",
+    "source=traceml-uv-cache,target=/cache/uv,type=volume",
+    "source=traceml-claude-config,target=/cache/claude,type=volume"
   ],
-  "containerEnv": {
-    "CLAUDE_CONFIG_DIR": "/home/beta/.claude"
-  },
   "customizations": {
     "vscode": {
       "extensions": ["anthropic.claude-code"]
