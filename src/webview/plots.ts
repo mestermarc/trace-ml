@@ -429,7 +429,7 @@ export class Plots {
   /** Line colour of a run: its stable run colour, or its group's colour when colouring by group. */
   private colorResolver(): (run: RunSummary) => string {
     const colors = palette();
-    const field = this.st.s.plot.colorBy === 'group' ? this.st.s.groupBy : null;
+    const field = this.st.s.plot.colorBy === 'group' ? this.st.groupField() : null;
     if (!field) return (run) => colors[this.st.colorIndex(run.key)] ?? '#888';
     const idx = this.st.groupColorIndex(field, [...this.st.filteredRuns(), ...this.st.plottedRuns()]);
     return (run) => colors[idx.get(groupLabel(run, field)) ?? 0] ?? '#888';
@@ -470,7 +470,7 @@ export class Plots {
 
   private renderControls(): void {
     const p = this.st.s.plot;
-    const key = JSON.stringify([p.xMode, p.logY, p.colorBy, p.byGroups, !!this.st.s.groupBy]);
+    const key = JSON.stringify([p.xMode, p.logY, p.colorBy, p.byGroups, !!this.st.groupField()]);
     if (key === this.controlsKey) return;
     this.controlsKey = key;
     const xSelect = h('select', { 'aria-label': 'X axis' }, ...(['step', 'epoch', 'wall'] as XMode[]).map((m) => h('option', { value: m, selected: p.xMode === m }, X_LABEL[m])));
@@ -487,18 +487,18 @@ export class Plots {
       this.st.changed('series');
     });
     // Shown on only while there is a grouping to colour by (the choice is kept for the next grouping).
-    const colorBy = toggle('Colour by group', p.colorBy === 'group' && !!this.st.s.groupBy, (v) => {
+    const colorBy = toggle('Colour by group', p.colorBy === 'group' && !!this.st.groupField(), (v) => {
       p.colorBy = v ? 'group' : 'run';
       this.st.changed('plots');
-    }, this.st.s.groupBy ? 'Colour lines by the table grouping' : 'Group the table (Group) to colour lines by group');
-    if (!this.st.s.groupBy) colorBy.classList.add('disabled');
-    (colorBy.querySelector('input') as HTMLInputElement).disabled = !this.st.s.groupBy;
-    const byGroups = toggle('Plot by groups', p.byGroups && !!this.st.s.groupBy, (v) => {
+    }, this.st.groupField() ? 'Colour lines by the table grouping' : 'Group the table (Group) to colour lines by group');
+    if (!this.st.groupField()) colorBy.classList.add('disabled');
+    (colorBy.querySelector('input') as HTMLInputElement).disabled = !this.st.groupField();
+    const byGroups = toggle('Plot by groups', p.byGroups && !!this.st.groupField(), (v) => {
       p.byGroups = v;
       this.st.changed('plots');
-    }, this.st.s.groupBy ? 'One line per table group: the mean of its selected runs at each step' : 'Group the table (Group) to plot group means');
-    if (!this.st.s.groupBy) byGroups.classList.add('disabled');
-    (byGroups.querySelector('input') as HTMLInputElement).disabled = !this.st.s.groupBy;
+    }, this.st.groupField() ? 'One line per table group: the mean of its selected runs at each step' : 'Group the table (Group) to plot group means');
+    if (!this.st.groupField()) byGroups.classList.add('disabled');
+    (byGroups.querySelector('input') as HTMLInputElement).disabled = !this.st.groupField();
     this.controls.replaceChildren(
       h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'X'), xSelect),
       toggle('Log Y', p.logY, (v) => {
@@ -526,7 +526,7 @@ export class Plots {
 
   /** Plot by groups is on and there is a grouping: the groups of the plotted runs, with colours. */
   private plotGroups(): PlotGroup[] | null {
-    const field = this.st.s.groupBy;
+    const field = this.st.groupField();
     if (!this.st.s.plot.byGroups || !field) return null;
     const colors = palette();
     const idx = this.st.groupColorIndex(field, [...this.st.filteredRuns(), ...this.st.plottedRuns()]);
@@ -542,7 +542,7 @@ export class Plots {
       if (key === this.legendKey) return;
       this.legendKey = key;
       this.legend.replaceChildren(
-        h('span', { class: 'muted small' }, `Mean per ${this.st.fieldLabel(this.st.s.groupBy!)}:`),
+        h('span', { class: 'muted small' }, `Mean per ${this.st.fieldLabel(this.st.groupField()!)}:`),
         ...groups.map((g) => {
           const n = g.runs.filter((r) => !hidden.has(r.key)).length;
           return h('span', { class: 'legend-item static', title: g.runs.map((r) => r.name).join('\n') }, h('span', { class: 'swatch', style: `background:${g.color}` }), h('span', { class: 'legend-name' }, g.label), h('span', { class: 'muted' }, `${n} run${n === 1 ? '' : 's'}`));
@@ -552,7 +552,7 @@ export class Plots {
       return;
     }
     const colorFor = this.colorResolver();
-    const groupField = this.st.s.plot.colorBy === 'group' ? this.st.s.groupBy : null;
+    const groupField = this.st.s.plot.colorBy === 'group' ? this.st.groupField() : null;
     const hidden = new Set(this.st.s.plot.hidden);
     const runs = this.st.plottedRuns();
     const key = JSON.stringify([runs.map((r) => [r.key, r.name, colorFor(r)]), [...hidden], this.st.selectedRuns().length, groupField, this.themeVersion, this.st.s.focused]);

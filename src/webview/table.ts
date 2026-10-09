@@ -373,7 +373,8 @@ export class RunTable {
     const last = Math.min(items.length, Math.ceil((top + this.scroll.clientHeight) / ROW_H) + OVERSCAN);
     const sel = new Set(this.st.s.selected);
     const colors = palette();
-    const groupField = this.st.s.groupBy ? this.st.fieldLabel(this.st.s.groupBy) : '';
+    const tableGroup = this.st.groupField();
+    const groupField = tableGroup ? this.st.fieldLabel(tableGroup) : '';
     const next = new Map<string, { el: HTMLDivElement; html: string }>();
 
     for (let i = first; i < last; i++) {

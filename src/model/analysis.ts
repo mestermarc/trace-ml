@@ -11,9 +11,39 @@ export function numericValue(run: RunSummary, field: string): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
-/** Group label of a run for a grouping field ("(none)" when missing). */
+/**
+ * Combined grouping field: runs are grouped by the unique combinations of several fields'
+ * values. Encoded as one field id so every chart / table path that takes a group field accepts it.
+ */
+const COMBINED_PREFIX = 'groups:';
+/** Separator between the parts of a combined group label ("cifar · adamw"). */
+export const GROUP_LABEL_SEP = ' · ';
+
+/** The field id grouping by all of `fields` (one field = itself; none = null). */
+export function combinedGroupField(fields: readonly string[]): string | null {
+  const uniq = [...new Set(fields)];
+  if (uniq.length <= 1) return uniq[0] ?? null;
+  return COMBINED_PREFIX + JSON.stringify(uniq);
+}
+
+/** The fields behind a group field id (a single field for ordinary ids). */
+export function groupFieldParts(field: string): string[] {
+  if (field.startsWith(COMBINED_PREFIX)) {
+    try {
+      const parts: unknown = JSON.parse(field.slice(COMBINED_PREFIX.length));
+      if (Array.isArray(parts) && parts.length > 0 && parts.every((p) => typeof p === 'string')) return parts;
+    } catch {
+      // not a combined id after all
+    }
+  }
+  return [field];
+}
+
+/** Group label of a run for a grouping field ("(none)" when missing; parts joined for combined fields). */
 export function groupLabel(run: RunSummary, field: string): string {
-  return groupLabelOf(columnValue(run, field));
+  return groupFieldParts(field)
+    .map((f) => groupLabelOf(columnValue(run, f)))
+    .join(GROUP_LABEL_SEP);
 }
 
 function groupLabelOf(v: Scalar): string {
@@ -24,32 +54,43 @@ function groupLabelOf(v: Scalar): string {
 export interface RunGroup {
   /** Display label; also the identity of the group. */
   label: string;
-  /** Representative raw value used for ordering (null for the "(none)" group). */
+  /** Representative raw value used for ordering (null for the "(none)" group; the label for combined groups). */
   value: Scalar;
   runs: RunSummary[];
 }
 
 /**
- * Groups runs by the value of a field (group, tags, status, a parameter, ...).
- * Groups are ordered by value (numbers numerically, strings naturally), "(none)" last.
+ * Groups runs by the value of a field (group, tags, status, a parameter, ...), or by the unique
+ * combinations of a combined field's values. Groups are ordered by value (numbers numerically,
+ * strings naturally; part by part for combined fields), "(none)" last.
  * Run order inside each group is preserved, so sorting applies within groups.
  */
 export function groupRuns(runs: readonly RunSummary[], field: string): RunGroup[] {
-  const groups = new Map<string, RunGroup>();
+  const parts = groupFieldParts(field);
+  const groups = new Map<string, { group: RunGroup; values: Scalar[] }>();
   for (const r of runs) {
-    const v = columnValue(r, field);
-    const label = groupLabelOf(v);
+    const raw = parts.map((f) => columnValue(r, f));
+    const labels = raw.map(groupLabelOf);
+    const label = labels.join(GROUP_LABEL_SEP);
     let g = groups.get(label);
     if (!g) {
-      g = { label, value: label === NONE_GROUP ? null : v, runs: [] };
+      const values = raw.map((v, i) => (labels[i] === NONE_GROUP ? null : v));
+      const value = parts.length === 1 ? values[0]! : values.every((v) => v === null) ? null : label;
+      g = { group: { label, value, runs: [] }, values };
       groups.set(label, g);
     }
-    g.runs.push(r);
+    g.group.runs.push(r);
   }
-  return [...groups.values()].sort((a, b) => {
-    if (a.value === null || b.value === null) return a.value === null ? (b.value === null ? 0 : 1) : -1;
-    return compareScalars(a.value, b.value);
-  });
+  const cmp = (a: Scalar, b: Scalar) => (a === null || b === null ? (a === null ? (b === null ? 0 : 1) : -1) : compareScalars(a, b));
+  return [...groups.values()]
+    .sort((a, b) => {
+      for (let i = 0; i < parts.length; i++) {
+        const c = cmp(a.values[i]!, b.values[i]!);
+        if (c !== 0) return c;
+      }
+      return 0;
+    })
+    .map((g) => g.group);
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +135,7 @@ export function scatterData(
       x,
       y,
       size: opts.sizeField ? numericValue(r, opts.sizeField) : null,
-      group: opts.groupField ? groupLabelOf(columnValue(r, opts.groupField)) : null,
+      group: opts.groupField ? groupLabel(r, opts.groupField) : null,
     });
   }
   const plotted = new Set(points.map((p) => p.key));

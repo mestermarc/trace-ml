@@ -220,11 +220,11 @@ export class Analysis {
       x: this.pickNumeric(a.x, ['param:optim.lr'], ['param', 'fixed']),
       y: this.pickNumeric(a.y, metricPrefs, metricKinds),
       size: a.size && this.st.numericFields().some((f) => f.id === a.size) ? a.size : null,
-      color: auto(a.color, this.st.s.groupBy),
+      color: auto(a.color, this.st.groupField()),
       boxField: this.pickNumeric(a.boxField, metricPrefs, metricKinds),
-      boxGroup: auto(a.boxGroup, this.st.s.groupBy ?? 'group'),
+      boxGroup: auto(a.boxGroup, this.st.groupField() ?? 'group'),
       barField: this.pickNumeric(a.bar.field, metricPrefs, metricKinds),
-      barGroup: auto(a.bar.group, this.st.s.groupBy),
+      barGroup: auto(a.bar.group, this.st.groupField()),
     };
   }
 
@@ -234,7 +234,7 @@ export class Analysis {
     const a = this.st.s.analysis;
     const numeric = this.st.numericFields();
     const groups = this.st.groupFields();
-    const key = JSON.stringify([a, r, numeric.map((f) => f.id), groups.map((f) => f.id), this.st.s.groupBy]);
+    const key = JSON.stringify([a, r, numeric.map((f) => f.id), groups.map((f) => f.id), this.st.groupField()]);
     if (key === c.controlsKey) return;
     c.controlsKey = key;
 
@@ -253,7 +253,8 @@ export class Analysis {
       this.st.changed('plots');
     };
     const setBar = (patch: Partial<AppState['s']['analysis']['bar']>) => set({ bar: { ...a.bar, ...patch } });
-    const autoLabel = `auto (${this.st.s.groupBy ? this.st.fieldLabel(this.st.s.groupBy) : 'table grouping: none'})`;
+    const tableGroup = this.st.groupField();
+    const autoLabel = `auto (${tableGroup ? this.st.fieldLabel(tableGroup) : 'table grouping: none'})`;
     const groupOpts = (): PickItem[] => [{ value: 'auto', label: autoLabel }, ...fieldItems(groups, 'none')];
     const opt = (value: string, label: string) => h('option', { value }, label);
     // "Plot by groups" switch; disabled (shown off) while there is no group field to average by.

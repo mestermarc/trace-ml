@@ -285,11 +285,20 @@ export function matchItem(item: PickItem, query: string): { start: number; end: 
   return i >= 0 ? { start: i, end: i + terms[0]!.length } : null;
 }
 
+/** Optional per-row action of a search list (e.g. "add as another grouping level"), also on Shift+Enter. */
+export interface PickAction {
+  icon: (value: string) => string;
+  title: (value: string) => string;
+  onPick: (value: string) => void;
+}
+
 /**
  * A search box over a sectioned list: typing filters the options as you go (any part of the name,
  * several words narrow down), ↑/↓ move, Enter picks, Esc closes the surrounding popover.
+ * `current` may be a set when several options are checked; `action` adds a button to every row.
  */
-export function searchList(items: readonly PickItem[], current: string | null, onPick: (value: string) => void, placeholder = 'Type to search…'): HTMLElement {
+export function searchList(items: readonly PickItem[], current: string | null | ReadonlySet<string>, onPick: (value: string) => void, placeholder = 'Type to search…', action?: PickAction): HTMLElement {
+  const isCurrent = (v: string) => (typeof current === 'string' ? v === current : current ? current.has(v) : false);
   const input = h('input', { type: 'search', class: 'pick-search', placeholder, 'aria-label': placeholder, spellcheck: 'false', autocomplete: 'off' });
   const list = h('div', { class: 'pick-list', role: 'listbox' });
   const empty = h('div', { class: 'pick-empty muted' }, 'No matching option');
@@ -314,8 +323,20 @@ export function searchList(items: readonly PickItem[], current: string | null, o
         nodes.push(h('div', { class: 'menu-header' }, section));
       }
       const label = m ? h('span', {}, item.label.slice(0, m.start), h('mark', {}, item.label.slice(m.start, m.end)), item.label.slice(m.end)) : h('span', {}, item.label);
-      const el = h('button', { type: 'button', class: `menu-item pick-item${item.value === current ? ' checked' : ''}`, role: 'option', 'aria-selected': String(item.value === current), title: item.label },
-        h('span', { class: 'menu-check' }, item.value === current ? icon('check', 14) : ''), h('span', { class: 'menu-label' }, label));
+      const checked = isCurrent(item.value);
+      const el = h('button', { type: 'button', class: `menu-item pick-item${checked ? ' checked' : ''}`, role: 'option', 'aria-selected': String(checked), title: item.label },
+        h('span', { class: 'menu-check' }, checked ? icon('check', 14) : ''), h('span', { class: 'menu-label' }, label));
+      const actionIcon = action?.icon(item.value);
+      if (action && actionIcon) {
+        const title = action.title(item.value);
+        // a span (not a nested button) inside the row button; clicks on it don't pick the row
+        const act = h('span', { class: 'pick-action', role: 'button', title, 'aria-label': title }, icon(actionIcon, 13));
+        act.addEventListener('click', (e) => {
+          e.stopPropagation();
+          action.onPick(item.value);
+        });
+        el.append(act);
+      }
       el.addEventListener('click', () => onPick(item.value));
       el.addEventListener('mousemove', () => setActive(shown.findIndex((s) => s.el === el), false));
       shown.push({ item, el });
@@ -323,7 +344,7 @@ export function searchList(items: readonly PickItem[], current: string | null, o
     }
     list.replaceChildren(...nodes);
     empty.hidden = shown.length > 0;
-    const cur = shown.findIndex((s) => s.item.value === current);
+    const cur = shown.findIndex((s) => isCurrent(s.item.value));
     setActive(q.trim() ? 0 : Math.max(0, cur), true);
   };
   input.addEventListener('input', render);
@@ -332,7 +353,7 @@ export function searchList(items: readonly PickItem[], current: string | null, o
     else if (e.key === 'ArrowUp') setActive(active - 1);
     else if (e.key === 'Enter') {
       const s = shown[active];
-      if (s) onPick(s.item.value);
+      if (s) (e.shiftKey && action ? action.onPick : onPick)(s.item.value);
     } else return;
     e.preventDefault();
   });
