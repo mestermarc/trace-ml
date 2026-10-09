@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.3
+
+- **Scatter axis limits.** *X range* / *Y range* set an axis's min and/or max by hand (empty = automatic; *Auto* resets both). Points outside the range are hidden from the chart, with the count shown, but stay in the data and the CSV export. Invalid limits (not a number, min ≥ max, ≤ 0 on a log axis) are flagged and not applied. Limits are remembered and reset when the X or Y field changes.
+- **Group by several fields.** In *Group*, click a field to group by it alone (as before) or use its **+** button (Shift+Enter) to add it as another level: runs are grouped by each combination of the values (`cifar10 · adamw`). Group statistics, *Colour by group*, *Plot by groups* and every chart whose group is *auto* follow all active fields. Each field has its own removable chip.
+- **Date filtering.** Date columns (started / ended / heartbeat, and config or summary fields whose values are all dates) are compared chronologically instead of as text. The filter builder shows date pickers (time optional) with *on*, *not on*, *before*, *after*, *on or before*, *on or after* and *between*; the column inputs accept `< 2026-09-01`, `>= 2026-09-01 08:00`, `= 2026-09-28` and `2026-09-01..2026-09-30`. Dates without a time zone are local time; values with an offset are compared at their actual instant. Number and text filters are unchanged.
+
 ## 0.2.2
 
 - **Plot by groups.** Every chart has a *Plot by groups* switch. Line: one curve per table group, the mean of its selected runs at each step (tooltips show how many runs are behind each point). Scatter: one point per Color group at the mean, with ±1 standard deviation whiskers. Bar: one bar per group (mean, min–max whisker; replaces the "Bars" menu). Box: a mean marker (◆) on each box. Off = the previous per-run plots. The chart data CSVs follow the switch.
