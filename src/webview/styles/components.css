@@ -125,6 +125,8 @@
 
 input[type='text'],
 input[type='search'],
+input[type='date'],
+input[type='time'],
 select {
   height: 28px;
   padding: 0 var(--tm-space-2);
@@ -139,12 +141,16 @@ select {
 
 input[type='text']:hover,
 input[type='search']:hover,
+input[type='date']:hover,
+input[type='time']:hover,
 select:hover {
   border-color: var(--tm-border-strong);
 }
 
 input[type='text']:focus,
 input[type='search']:focus,
+input[type='date']:focus,
+input[type='time']:focus,
 select:focus {
   border-color: var(--tm-accent);
   box-shadow: var(--tm-focus);
@@ -2497,4 +2503,27 @@ tr.cmp-section th {
 .pick-action:hover {
   background: var(--tm-surface-raised);
   color: var(--tm-accent);
+}
+
+/* filter builder: value input, or date pickers on date columns */
+.cond-add {
+  flex-wrap: wrap;
+}
+
+.cond-value {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--tm-space-2);
+  min-width: 0;
+}
+
+.date-pick {
+  display: inline-flex;
+  gap: var(--tm-space-1);
+}
+
+.cond-add .date-pick input {
+  flex: none;
 }
