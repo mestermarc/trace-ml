@@ -1,9 +1,9 @@
 # TraceML dev container: Ubuntu 24.04 + Python 3.12 + uv + Node 22, run as a non-root user.
 # Nothing here depends on the host: the user is a build arg, and the in-container paths below
-# (workspace, caches) are defined once and used by .devcontainer/ and traceml.ps1.
+# (workspace, caches) are defined once and used by .devcontainer/ and traceml.sh.
 #
 # Build (from the repo root):   podman build -t traceml-dev -f container/Containerfile .
-# Or just use:                  .\container\traceml.ps1 build
+# Or just use:                  container/traceml.sh build
 
 ARG UV_VERSION=0.8.17
 
