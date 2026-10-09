@@ -2464,3 +2464,37 @@ tr.cmp-section th {
   border-color: var(--tm-error) !important;
   outline-color: var(--tm-error);
 }
+
+/* group popover: several grouping levels */
+.group-levels {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--tm-space-1) var(--tm-space-2);
+  padding-bottom: var(--tm-space-2);
+  margin-bottom: var(--tm-space-2);
+  border-bottom: 1px solid var(--tm-border-subtle);
+}
+
+.pick-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-left: var(--tm-space-1);
+  border-radius: var(--tm-radius-sm, 4px);
+  color: var(--tm-text-muted);
+  opacity: 0;
+}
+
+.pick-item:hover .pick-action,
+.pick-item.active .pick-action,
+.pick-item.checked .pick-action {
+  opacity: 1;
+}
+
+.pick-action:hover {
+  background: var(--tm-surface-raised);
+  color: var(--tm-accent);
+}

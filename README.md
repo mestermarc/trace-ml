@@ -277,6 +277,7 @@ TraceML uses a dark-only application shell with its own design system, inside a 
   - **Differing params only:** shows only the config columns whose values differ between the filtered runs.
   - **Starting values:** adds each metric's starting value (its first logged, non-null value in `metrics.jsonl`) as `start` columns next to the metrics already shown. It also adds them to the Columns chooser, the scatter/box/bar fields, the inspector and the Compare view, so you can see whether runs started from the same point.
   - **Group** groups by status, group, tags, name, any config value, or a text summary field. The list is searchable: type part of a name (e.g. `batch`) and pick with ↑/↓ and Enter.
+    - **Several grouping fields:** click a field to group by it alone, or use its **+** button (or Shift+Enter) to add it as another level, e.g. treatment group + scanner + dataset. Runs are then grouped by each combination of the values (`cifar10 · adamw`); **−** or the chips remove a field. Group statistics, *Colour by group*, *Plot by groups* and every chart whose group is *auto* use all active fields.
     - Each group gets a collapsible header row showing its color, value, run count and how many runs are selected. The header's checkbox selects the whole group.
     - The header row also shows the **group mean (μ)** of every numeric column (config values, run metrics, summary values, duration, step). Hover for n, min, max and standard deviation.
     - Groups are ordered by value, with `(none)` last. Sorting applies within each group.

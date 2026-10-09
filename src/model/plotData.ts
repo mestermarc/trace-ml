@@ -2,7 +2,7 @@
 // One flat table per chart, named like the table export (`config.*`, `run.best.*`, `summary.*`, ...).
 // Pure; shared by the webview (scatter / box / bar) and the host (line charts, full history).
 import type { Scalar } from '../types';
-import type { BarData, BoxData, ScatterData } from './analysis';
+import { groupFieldParts, type BarData, type BoxData, type ScatterData } from './analysis';
 import type { MetricsHistory } from '../parsers/metricsJsonl';
 import { groupMeanSeries, type GroupPoint } from './groupAgg';
 import { extractSeries } from './metricSeries';
@@ -11,6 +11,9 @@ import { csvHeader, serializeTableCsv } from './tableExport';
 
 /** CSV header name of a field (column id), e.g. `best:val/auc` -> `run.best.val/auc`. */
 export function fieldHeader(colId: string): string {
+  const parts = groupFieldParts(colId);
+  // combined grouping field: config.data+config.optim (values are joined with " · ")
+  if (parts.length > 1) return parts.map(fieldHeader).join('+');
   return csvHeader(parseColumnId(colId));
 }
 

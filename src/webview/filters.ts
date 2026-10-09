@@ -238,8 +238,10 @@ export class Toolbar {
     this.exportBtn.disabled = displayed === 0;
     const colConds = Object.entries(this.st.s.filters.columns).filter(([k, v]) => v.trim() && k !== 'location').length;
     this.setBadge(this.filterBtn, colConds);
-    this.groupBtn.classList.toggle('active', !!this.st.s.groupBy);
-    this.groupBtn.querySelector('.btn-label')!.textContent = this.st.s.groupBy ? `Group: ${this.shortLabel(this.st.s.groupBy)}` : 'Group';
+    const groupBy = this.st.s.groupBy;
+    this.groupBtn.classList.toggle('active', groupBy.length > 0);
+    this.groupBtn.querySelector('.btn-label')!.textContent = groupBy.length ? `Group: ${groupBy.map((f) => this.shortLabel(f)).join(' × ')}` : 'Group';
+    this.groupBtn.title = groupBy.length > 1 ? 'Grouped by every combination of these fields' : 'Group runs by a field';
     this.renderChips();
   }
 
@@ -323,12 +325,9 @@ export class Toolbar {
       if (invalid) el.classList.add('invalid');
       chips.push(el);
     }
-    if (this.st.s.groupBy)
+    for (const field of this.st.s.groupBy)
       chips.push(
-        chip(kv('grouped by', this.shortLabel(this.st.s.groupBy)), () => {
-          this.st.s.groupBy = null;
-          this.st.changed('table', 'toolbar', 'plots');
-        }),
+        chip(kv('grouped by', this.shortLabel(field)), () => this.st.setGroupBy(this.st.s.groupBy.filter((f) => f !== field))),
       );
     if (this.st.s.differingOnly)
       chips.push(
@@ -345,7 +344,7 @@ export class Toolbar {
           variant: 'ghost',
           cls: 'btn-small',
           onClick: () => {
-            this.st.s.groupBy = null;
+            this.st.s.groupBy = [];
             this.st.s.differingOnly = false;
             this.search.value = '';
             this.st.clearFilters();
@@ -445,17 +444,47 @@ export class Toolbar {
     openPopover(this.filterBtn, body, { width: 560, label: 'Filter conditions' });
   }
 
+  /**
+   * Group popover. Clicking a field groups by it alone (and closes, as with a single field); its +
+   * button (or Shift+Enter) adds it as another grouping level: runs are then grouped by every
+   * combination of the chosen fields' values. − removes a field.
+   */
   private openGroup(): void {
-    const cur = this.st.s.groupBy;
     let close = () => {};
+    const body = h('div', { class: 'pop-body pick-pop' });
     const set = (v: string) => {
       close();
-      this.st.s.groupBy = v || null;
-      this.st.s.collapsedGroups = [];
-      this.st.changed('table', 'plots', 'toolbar');
+      this.st.setGroupBy(v ? [v] : []);
     };
-    const items: PickItem[] = [{ value: '', label: 'No grouping' }, ...fieldItems(this.st.groupFields()).map((i) => ({ ...i, label: i.label.replace(/^config /, '') }))];
-    close = openPopover(this.groupBtn, h('div', { class: 'pop-body pick-pop' }, searchList(items, cur ?? '', set, 'Search fields to group by…')), { label: 'Group by', width: 300 });
+    const toggleField = (v: string) => {
+      if (!v) return set(v);
+      const cur = this.st.s.groupBy;
+      this.st.setGroupBy(cur.includes(v) ? cur.filter((f) => f !== v) : [...cur, v]);
+      render();
+    };
+    const render = () => {
+      const cur = this.st.s.groupBy;
+      const items: PickItem[] = [{ value: '', label: 'No grouping' }, ...fieldItems(this.st.groupFields()).map((i) => ({ ...i, label: i.label.replace(/^config /, '') }))];
+      const action = {
+        icon: (v: string) => (!v ? '' : cur.includes(v) ? 'close' : 'plus'),
+        title: (v: string) => (cur.includes(v) ? 'Remove from the grouping' : 'Add as another grouping level (group by each combination)'),
+        onPick: toggleField,
+      };
+      const levels = cur.length
+        ? h(
+            'div',
+            { class: 'group-levels' },
+            h('span', { class: 'field-label' }, 'Grouped by'),
+            ...cur.flatMap((f, i) => [i ? h('span', { class: 'muted' }, '×') : '', chip(this.shortLabel(f), () => toggleField(f))]),
+          )
+        : '';
+      const list = searchList(items, cur.length ? new Set(cur) : '', set, 'Search fields to group by…', action);
+      body.replaceChildren(levels, list, h('div', { class: 'pop-help muted' }, 'Click a field to group by it alone. + (or Shift+Enter) adds it as another level: runs are grouped by each combination of the values.'));
+      if (body.isConnected) list.querySelector('input')?.focus();
+    };
+    render();
+    close = openPopover(this.groupBtn, body, { label: 'Group by', width: 340 });
+    body.querySelector<HTMLInputElement>('.pick-search')?.focus();
   }
 
   private openColumns(): void {
@@ -520,7 +549,7 @@ export class Toolbar {
 
   private openMore(anchor: HTMLButtonElement): void {
     const st = this.st;
-    const grouped = !!st.s.groupBy;
+    const grouped = st.s.groupBy.length > 0;
     openPopover(
       anchor,
       menu([

@@ -1,7 +1,7 @@
 // Webview state: data received from the host plus persisted UI state (sort, filters, selection...).
 import { defaultVisibleColumns, differingParams, filterRuns, limitRows, moveColumn, pruneSelection, type FilterState } from '../model/filters';
 export { MAX_ROWS_LIMIT, parseMaxRows } from '../model/filters';
-import { groupRuns, type AxisLimits, type RunGroup } from '../model/analysis';
+import { combinedGroupField, groupFieldParts, groupRuns, type AxisLimits, type RunGroup } from '../model/analysis';
 import type { XMode } from '../model/metricSeries';
 import { dynamicColumns, sortRuns, type ColumnDef, type SortKey, FIXED_COLUMNS, OPTIONAL_FIXED_COLUMNS, parseColumnId } from '../model/run';
 import type { HiddenRun } from '../model/hiddenRuns';
@@ -54,8 +54,8 @@ export interface PersistedState {
     /** "Plot by groups": one mean curve per table group instead of one line per run. */
     byGroups: boolean;
   };
-  /** Table grouping field (column id), or null. */
-  groupBy: string | null;
+  /** Table grouping fields (column ids), in order; runs are grouped by their unique combinations. Empty = no grouping. */
+  groupBy: string[];
   collapsedGroups: string[];
   analysis: {
     view: AnalysisView;
@@ -111,7 +111,7 @@ const DEFAULT_STATE: PersistedState = {
   showFirst: false,
   columnWidths: {},
   plot: { metrics: null, xMode: 'step', logY: false, smoothing: 0, hidden: [], colorBy: 'run', byGroups: false },
-  groupBy: null,
+  groupBy: [],
   collapsedGroups: [],
   analysis: {
     view: 'line',
@@ -179,6 +179,7 @@ export class AppState {
             ...saved,
             plot: { ...DEFAULT_STATE.plot, ...(saved.plot ?? {}) },
             analysis: { ...DEFAULT_STATE.analysis, ...(saved.analysis ?? {}), bar: { ...DEFAULT_STATE.analysis.bar, ...(saved.analysis?.bar ?? {}) } },
+            groupBy: savedGroupBy(saved.groupBy),
           }
         : structuredClone(DEFAULT_STATE);
   }
@@ -317,10 +318,26 @@ export class AppState {
     return (this.cache.displayed ??= limitRows(this.sortedRuns(), this.s.maxRows));
   }
 
-  /** Groups of the displayed runs by the table grouping field (null when not grouping). */
+  /**
+   * The table grouping as one group field id (a combined id when grouping by several fields), or
+   * null. Charts and statistics take this, so they follow every active grouping field.
+   */
+  groupField(): string | null {
+    return combinedGroupField(this.s.groupBy);
+  }
+
+  /** Sets the table grouping fields (collapsed groups are reset: their labels change). */
+  setGroupBy(fields: string[]): void {
+    this.s.groupBy = [...new Set(fields)];
+    this.s.collapsedGroups = [];
+    this.changed('table', 'plots', 'toolbar');
+  }
+
+  /** Groups of the displayed runs by the table grouping fields (null when not grouping). */
   tableGroups(): RunGroup[] | null {
-    if (!this.s.groupBy) return null;
-    return (this.cache.groups ??= groupRuns(this.displayedRuns(), this.s.groupBy));
+    const field = this.groupField();
+    if (!field) return null;
+    return (this.cache.groups ??= groupRuns(this.displayedRuns(), field));
   }
 
   /** Rows of the run table: group headers (when grouping) followed by their runs unless collapsed. */
@@ -344,6 +361,8 @@ export class AppState {
   }
 
   fieldLabel(id: string): string {
+    const parts = groupFieldParts(id);
+    if (parts.length > 1) return parts.map((p) => this.fieldLabel(p)).join(' × ');
     const c = this.availableColumns().find((x) => x.id === id);
     if (!c) return id;
     return c.kind === 'param' ? `config ${c.key}` : c.label;
@@ -527,7 +546,7 @@ export class AppState {
         view: {
           filters: { search: f.search, statuses: [...f.statuses], columns: { ...f.columns } },
           sort: this.s.sort.map((k) => ({ ...k })),
-          groupBy: this.s.groupBy,
+          groupBy: this.groupField(),
           maxRows: this.s.maxRows,
         },
         counts: { total: this.allRuns().length, filtered: this.filteredRuns().length },
@@ -602,6 +621,12 @@ function autoFirstColumns(ids: readonly string[], avail: readonly ColumnDef[]): 
   const shownMetrics = new Set(ids.map(parseColumnId).filter((c) => c.kind === 'last' || c.kind === 'best').map((c) => c.key));
   const picked = shownMetrics.size ? firsts.filter((c) => shownMetrics.has(c.key)) : firsts.slice(0, 6);
   return picked.map((c) => c.id);
+}
+
+/** Grouping fields of a saved state; states before multi-field grouping saved one field or null. */
+function savedGroupBy(v: unknown): string[] {
+  if (typeof v === 'string') return [v];
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
 }
 
 /** UI state injected by the host into the page (see extension.ts html()); null when absent. */
