@@ -9,7 +9,7 @@ import { MAX_PNG_BYTES, isPng, pngSize, setPngDpi } from './model/png';
 import { lineCsv, lineGroupCsv } from './model/plotData';
 import { buildTableExport, exportFileName, plotFileName, serializeTableCsv } from './model/tableExport';
 import { READONLY_SCHEME, ReadonlyRunFiles } from './readonlyFs';
-import { joinPath, relativePath } from './paths';
+import { relativePath } from './paths';
 import { RunDb } from './runDb';
 import { parseRunIndex, serializeRunIndex } from './runIndex';
 import { Poller } from './poller';
