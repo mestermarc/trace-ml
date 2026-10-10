@@ -16,6 +16,7 @@
     "source=traceml-uv-cache,target=/cache/uv,type=volume",
     "source=traceml-claude-config,target=/cache/claude,type=volume"
   ],
+  "postCreateCommand": "git config --global --add safe.directory /workspace",
   "customizations": {
     "vscode": {
       "extensions": ["anthropic.claude-code"]

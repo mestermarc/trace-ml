@@ -1,5 +1,6 @@
 // Visualizations, stacked: Line (metric history of the selected runs) followed by the run-level
-// Scatter, Box and Bar charts of the filtered runs. Each section is collapsible and remembers
+// Scatter, Box and Bar charts of the selected runs (all filtered runs when nothing is selected),
+// like the Line view. Each section is collapsible and remembers
 // its state. Run-level charts use only data already in the webview (params + metrics.json
 // summaries); they never request metrics.jsonl histories.
 import {
@@ -26,6 +27,7 @@ import { cssVar, formatDuration, formatNumber, formatTime, h, palette, withAlpha
 import { fieldItems } from './filters';
 import { composePng, legendFromDom, rasterizeSvg } from './pngExport';
 import type { Plots } from './plots';
+import type { RunSummary } from '../types';
 import type { AppState, Area } from './state';
 import { button, emptyState, icon, searchSelect, toggle, type PickItem } from './ui';
 
@@ -116,9 +118,9 @@ function jitter(key: string): number {
 
 const SECTIONS: { id: SectionId; title: string; icon: string; hint: string }[] = [
   { id: 'line', title: 'Line', icon: 'chart', hint: 'metric history of the selected runs' },
-  { id: 'scatter', title: 'Scatter', icon: 'scatter', hint: 'two run-level fields of the filtered runs' },
-  { id: 'box', title: 'Box', icon: 'box', hint: 'distribution per group of the filtered runs' },
-  { id: 'bar', title: 'Bar', icon: 'columns', hint: 'one value per run or per group of the filtered runs' },
+  { id: 'scatter', title: 'Scatter', icon: 'scatter', hint: 'two run-level fields of the selected (or filtered) runs' },
+  { id: 'box', title: 'Box', icon: 'box', hint: 'distribution per group of the selected (or filtered) runs' },
+  { id: 'bar', title: 'Bar', icon: 'columns', hint: 'one value per run or per group of the selected (or filtered) runs' },
 ];
 
 /** One run-level chart section (scatter / box / bar): controls, info line, SVG chart, legend. */
@@ -219,11 +221,20 @@ export class Analysis {
     return this.sectionEls.get(id)!.details.open;
   }
 
+  /**
+   * Runs for the scatter / box / bar charts: the selected runs, as in the Line view, or all
+   * filtered runs while nothing is selected. `scope` names them in labels ("selected" / "filtered").
+   */
+  private chartRuns(): { runs: RunSummary[]; scope: 'selected' | 'filtered' } {
+    const selected = this.st.selectedRuns();
+    return selected.length ? { runs: selected, scope: 'selected' } : { runs: this.st.filteredRuns(), scope: 'filtered' };
+  }
+
   render(areas: Set<Area>): void {
     const sel = this.st.plottedRuns().length;
-    const filtered = this.st.filteredRuns().length;
+    const { runs, scope: chartScope } = this.chartRuns();
     for (const [id, { scope }] of this.sectionEls) {
-      scope.textContent = id === 'line' ? `${sel} selected run${sel === 1 ? '' : 's'}` : `${filtered} filtered run${filtered === 1 ? '' : 's'}`;
+      scope.textContent = id === 'line' ? `${sel} selected run${sel === 1 ? '' : 's'}` : `${runs.length} ${chartScope} run${runs.length === 1 ? '' : 's'}`;
     }
     if (this.isOpen('line')) this.plots.render(areas);
     const relevant = ['runs', 'table', 'plots', 'selection', 'toolbar', 'nav', 'detail'].some((a) => areas.has(a as Area));
@@ -428,7 +439,7 @@ export class Analysis {
     const c = this.charts[kind];
     const r = this.resolved();
     this.renderControls(c, r);
-    const runs = this.st.filteredRuns();
+    const { runs, scope } = this.chartRuns();
     const width = Math.max(320, c.chartBox.clientWidth || 600);
     const common = [kind, r, this.st.s.analysis, width, this.st.s.selected, this.st.s.focused];
 
@@ -439,15 +450,15 @@ export class Analysis {
       const key = JSON.stringify([...common, data, byGroups]);
       if (key === c.renderedKey) return;
       c.renderedKey = key;
-      if (byGroups) this.drawScatter(c, { ...data, points: scatterGroupMeans(data) }, r.x, r.y, null, r.color, width, runs.length, true);
-      else this.drawScatter(c, data, r.x, r.y, r.size, r.color, width, runs.length);
+      if (byGroups) this.drawScatter(c, { ...data, points: scatterGroupMeans(data) }, r.x, r.y, null, r.color, width, runs.length, scope, true);
+      else this.drawScatter(c, data, r.x, r.y, r.size, r.color, width, runs.length, scope);
     } else if (kind === 'box') {
       if (!r.boxField) return this.showEmpty(c, 'No numeric run-level fields found (params or metrics.json).');
       const data = boxData(runs, r.boxField, r.boxGroup);
       const key = JSON.stringify([...common, data]);
       if (key === c.renderedKey) return;
       c.renderedKey = key;
-      this.drawBox(c, data, r.boxField, r.boxGroup, width, runs.length);
+      this.drawBox(c, data, r.boxField, r.boxGroup, width, runs.length, scope);
     } else {
       if (!r.barField) return this.showEmpty(c, 'No numeric run-level fields found (params or metrics.json).');
       const b = this.st.s.analysis.bar;
@@ -456,17 +467,17 @@ export class Analysis {
       const key = JSON.stringify([...common, data, this.st.s.colors]);
       if (key === c.renderedKey) return;
       c.renderedKey = key;
-      this.drawBar(c, data, r.barField, r.barGroup, mode, b.mode === 'groups' && !r.barGroup, width, runs.length);
+      this.drawBar(c, data, r.barField, r.barGroup, mode, b.mode === 'groups' && !r.barGroup, width, runs.length, scope);
     }
   }
 
   /**
    * Saves a scatter / box / bar chart's data as CSV: the same run-level values the chart uses
-   * (all filtered runs; bar charts include runs beyond the bars drawn).
+   * (the selected or filtered runs; bar charts include runs beyond the bars drawn).
    */
   private exportData(kind: RunLevelKind): void {
     const r = this.resolved();
-    const runs = this.st.filteredRuns();
+    const { runs } = this.chartRuns();
     const label = (f: string | null) => (f ? this.st.fieldLabel(f) : '');
     if (kind === 'scatter') {
       if (!r.x || !r.y) return this.st.showError('Nothing to export: choose X and Y.');
@@ -571,7 +582,7 @@ export class Analysis {
   }
 
   /** `byGroups`: the points are group means (GroupPoint), drawn larger with ±1 std whiskers. */
-  private drawScatter(c: RunLevelChart, data: ScatterData, xf: string, yf: string, sizeF: string | null, colorF: string | null, w: number, total: number, byGroups = false): void {
+  private drawScatter(c: RunLevelChart, data: ScatterData, xf: string, yf: string, sizeF: string | null, colorF: string | null, w: number, total: number, scope: string, byGroups = false): void {
     const { logX, logY } = this.st.s.analysis;
     const colors = palette();
     const colorOf = colorF ? this.st.groupColorIndex(colorF) : new Map<string, number>();
@@ -659,11 +670,11 @@ export class Analysis {
       this.renderGroupLegend(c, data.groups, colorOf, colorF);
       return;
     }
-    c.info.textContent = `${pts.length} of ${total} filtered runs plotted${excluded ? ` · ${excluded} excluded (missing, non-numeric${logDropped ? ' or ≤ 0 on a log axis' : ''})` : ''}${limitNotes} · click a point to open the run`;
+    c.info.textContent = `${pts.length} of ${total} ${scope} runs plotted${excluded ? ` · ${excluded} excluded (missing, non-numeric${logDropped ? ' or ≤ 0 on a log axis' : ''})` : ''}${limitNotes} · click a point to open the run`;
     this.renderGroupLegend(c, colorF ? data.groups : [], colorOf, colorF);
   }
 
-  private drawBox(c: RunLevelChart, data: BoxData, field: string, groupF: string | null, minW: number, total: number): void {
+  private drawBox(c: RunLevelChart, data: BoxData, field: string, groupF: string | null, minW: number, total: number, scope: string): void {
     const logY = this.st.s.analysis.boxLogY;
     const colors = palette();
     const colorOf = groupF ? this.st.groupColorIndex(groupF) : new Map<string, number>();
@@ -736,13 +747,13 @@ export class Analysis {
     this.mountSvg(c, svg, rows);
     const excluded = data.excluded + logDropped;
     const noneNote = data.boxes.some((b) => b.label === NONE_GROUP) ? ` · "${NONE_GROUP}" = runs without a value for the group field` : '';
-    c.info.textContent = `${data.boxes.length} group${data.boxes.length === 1 ? '' : 's'} · ${total - excluded} of ${total} filtered runs${excluded ? ` · ${excluded} excluded (missing or non-numeric)` : ''}${noneNote} · click a point to open the run`;
+    c.info.textContent = `${data.boxes.length} group${data.boxes.length === 1 ? '' : 's'} · ${total - excluded} of ${total} ${scope} runs${excluded ? ` · ${excluded} excluded (missing or non-numeric)` : ''}${noneNote} · click a point to open the run`;
     c.legend.replaceChildren();
   }
 
   /** Horizontal bars (names stay readable): one per run, or one per group with a min–max range. */
-  private drawBar(c: RunLevelChart, data: BarData, field: string, groupF: string | null, mode: 'runs' | 'groups', groupsNeedGroup: boolean, w: number, total: number): void {
-    if (!data.bars.length) return this.showEmpty(c, `No filtered run has a numeric value for ${this.st.fieldLabel(field)}.`);
+  private drawBar(c: RunLevelChart, data: BarData, field: string, groupF: string | null, mode: 'runs' | 'groups', groupsNeedGroup: boolean, w: number, total: number, scope: string): void {
+    if (!data.bars.length) return this.showEmpty(c, `No ${scope} run has a numeric value for ${this.st.fieldLabel(field)}.`);
     const colors = palette();
     const colorOf = groupF ? this.st.groupColorIndex(groupF) : new Map<string, number>();
     const fmt = formatterFor(field);
@@ -806,7 +817,7 @@ export class Analysis {
     });
     this.mountSvg(c, svg, rows, () => mode === 'runs');
     const parts = [
-      mode === 'groups' ? `${data.bars.length} groups (mean, whiskers = min–max)` : `${data.bars.length} of ${total} filtered runs`,
+      mode === 'groups' ? `${data.bars.length} groups (mean, whiskers = min–max)` : `${data.bars.length} of ${total} ${scope} runs`,
       data.truncated ? `${data.truncated} more not shown (max ${BAR_LIMIT}; filter to narrow down)` : '',
       data.excluded ? `${data.excluded} excluded (missing or non-numeric)` : '',
       groupsNeedGroup ? 'choose a Group field for group means' : '',

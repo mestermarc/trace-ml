@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Scatter, Box and Bar follow the selection.** When runs are selected in the table, the run-level charts (and their CSV exports) show only those runs, like the Line view. With nothing selected they show all filtered runs, as before. The section header says which ("3 selected runs" / "120 filtered runs").
+
 ## 0.2.3
 
 - **Scatter axis limits.** *X range* / *Y range* set an axis's min and/or max by hand (empty = automatic; *Auto* resets both). Points outside the range are hidden from the chart, with the count shown, but stay in the data and the CSV export. Invalid limits (not a number, min ≥ max, ≤ 0 on a log axis) are flagged and not applied. Limits are remembered and reset when the X or Y field changes.

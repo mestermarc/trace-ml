@@ -16,5 +16,5 @@
     "noEmit": true,
     "types": ["node", "vscode"]
   },
-  "include": ["src", "test", "scripts", "vitest.config.ts"]
+  "include": ["src", "test", "scripts", "vitest.config.mts"]
 }
