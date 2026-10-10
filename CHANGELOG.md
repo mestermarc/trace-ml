@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.4
 
 - **Scatter, Box and Bar follow the selection.** When runs are selected in the table, the run-level charts (and their CSV exports) show only those runs, like the Line view. With nothing selected they show all filtered runs, as before. The section header says which ("3 selected runs" / "120 filtered runs").
 
