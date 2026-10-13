@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.5
 
 - **Several Scatter, Box and Bar charts.** Like the Line view's one chart per metric: *Add Y* (scatter, same X) and *Add chart* (box, bar) add a chart per extra field, each with its own PNG / CSV / remove buttons. Section-wide options (X, grouping, colours, sorting) apply to all of a section's charts.
 - **Readable line charts with many runs.** Hovering a line highlights it (thicker, others dimmed). The new *Lines* control draws *All runs*, the *Top N* runs per chart by final value (*Best*: auto / lowest / highest), or the *Median + IQR* band over pale run lines. *Auto* (default) draws every run up to 15 and the top 10 above that. The focused run is always drawn as a full line.
