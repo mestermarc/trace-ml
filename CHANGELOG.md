@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Several Scatter, Box and Bar charts.** Like the Line view's one chart per metric: *Add Y* (scatter, same X) and *Add chart* (box, bar) add a chart per extra field, each with its own PNG / CSV / remove buttons. Section-wide options (X, grouping, colours, sorting) apply to all of a section's charts.
+- **Readable line charts with many runs.** Hovering a line highlights it (thicker, others dimmed). The new *Lines* control draws *All runs*, the *Top N* runs per chart by final value (*Best*: auto / lowest / highest), or the *Median + IQR* band over pale run lines. *Auto* (default) draws every run up to 15 and the top 10 above that. The focused run is always drawn as a full line.
+- **Lighter scanning.** Deciding whether a folder is a run now stats the five marker names instead of listing the folder (fast on folders full of checkpoints); folders that aren't runs are remembered until they change; `node_modules` / `__pycache__` and runs deleted from TraceML are skipped. `run.json`, `params.yaml` and `metrics.json` over 4 MB (was 16 MB) are no longer parsed; `config.json`, read only for the details view, keeps 16 MB.
+
 ## 0.2.4
 
 - **Scatter, Box and Bar follow the selection.** When runs are selected in the table, the run-level charts (and their CSV exports) show only those runs, like the Line view. With nothing selected they show all filtered runs, as before. The section header says which ("3 selected runs" / "120 filtered runs").

@@ -29,7 +29,7 @@ import { composePng, legendFromDom, rasterizeSvg } from './pngExport';
 import type { Plots } from './plots';
 import type { RunSummary } from '../types';
 import type { AppState, Area } from './state';
-import { button, emptyState, icon, searchSelect, toggle, type PickItem } from './ui';
+import { button, emptyState, icon, openPopover, searchList, searchSelect, toggle, type PickItem } from './ui';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 let clipSeq = 0;
@@ -123,30 +123,60 @@ const SECTIONS: { id: SectionId; title: string; icon: string; hint: string }[] =
   { id: 'bar', title: 'Bar', icon: 'columns', hint: 'one value per run or per group of the selected (or filtered) runs' },
 ];
 
-/** One run-level chart section (scatter / box / bar): controls, info line, SVG chart, legend. */
-class RunLevelChart {
-  readonly body: HTMLElement;
-  readonly controls = h('div', { class: 'plot-options' });
+/** One run-level chart (one field): title, PNG / CSV / remove buttons, info line, SVG chart, legend. */
+class ChartPanel {
+  readonly el: HTMLElement;
+  readonly title = h('span', { class: 'chart-title' });
   readonly info = h('div', { class: 'analysis-info' });
   readonly chartBox = h('div', { class: 'svg-chart' });
   readonly legend = h('div', { class: 'plot-legend' });
   readonly tooltip = h('div', { class: 'chart-tooltip', role: 'tooltip' });
   renderedKey = '';
-  controlsKey = '';
   width = 0;
+  private readonly resizeObserver: ResizeObserver;
 
-  constructor(readonly kind: RunLevelKind, onResize: () => void) {
+  constructor(onResize: () => void, actions: { onPng: () => void; onData: () => void; onRemove: (() => void) | null }) {
     this.tooltip.hidden = true;
     this.chartBox.append(this.tooltip);
-    this.body = h('div', { class: 'run-level' }, this.controls, this.info, this.chartBox, this.legend);
-    new ResizeObserver(() => {
+    const png = button({ icon: 'download', title: 'Save this chart as PNG (300 DPI)', variant: 'ghost', cls: 'chart-remove', onClick: actions.onPng });
+    const data = button({ icon: 'file', title: "Save this chart's data as CSV (for agents)", variant: 'ghost', cls: 'chart-remove', onClick: actions.onData });
+    const remove = actions.onRemove ? button({ icon: 'close', title: 'Remove this chart', variant: 'ghost', cls: 'chart-remove', onClick: actions.onRemove }) : null;
+    this.el = h('article', { class: 'run-level-panel' }, h('header', { class: 'chart-head' }, this.title, h('span', { class: 'spacer' }), data, png, remove), this.info, this.chartBox, this.legend);
+    this.resizeObserver = new ResizeObserver(() => {
       const w = this.chartBox.clientWidth;
       if (w && Math.abs(w - this.width) > 2) {
         this.width = w;
         this.renderedKey = '';
         onResize();
       }
-    }).observe(this.chartBox);
+    });
+    this.resizeObserver.observe(this.chartBox);
+  }
+
+  dispose(): void {
+    this.resizeObserver.disconnect();
+    this.el.remove();
+  }
+}
+
+/**
+ * One run-level chart section (scatter / box / bar): shared controls, then one chart per field
+ * (the main field plus any added with "Add chart", like the Line view's one chart per metric).
+ */
+class RunLevelChart {
+  readonly body: HTMLElement;
+  readonly controls = h('div', { class: 'plot-options' });
+  readonly list = h('div', { class: 'run-level-panels' });
+  /** By `main:<field>` / `extra:<field>` ('' = the empty-state panel). */
+  readonly panels = new Map<string, ChartPanel>();
+  controlsKey = '';
+
+  constructor(readonly kind: RunLevelKind) {
+    this.body = h('div', { class: 'run-level' }, this.controls, this.list);
+  }
+
+  invalidate(): void {
+    for (const p of this.panels.values()) p.renderedKey = '';
   }
 }
 
@@ -160,47 +190,14 @@ export class Analysis {
     private readonly plots: Plots,
     private readonly onPick: (key: string) => void,
   ) {
-    this.charts = {
-      scatter: new RunLevelChart('scatter', () => this.renderChart('scatter')),
-      box: new RunLevelChart('box', () => this.renderChart('box')),
-      bar: new RunLevelChart('bar', () => this.renderChart('bar')),
-    };
+    this.charts = { scatter: new RunLevelChart('scatter'), box: new RunLevelChart('box'), bar: new RunLevelChart('bar') };
     const collapsed = new Set(st.s.analysis.collapsed);
     const sections = SECTIONS.map((sec) => {
       const scope = h('span', { class: 'viz-scope' });
-      const id = sec.id;
-      const png =
-        id === 'line'
-          ? null
-          : button({
-              icon: 'download',
-              title: `Save the ${sec.title.toLowerCase()} chart as PNG (300 DPI)`,
-              variant: 'ghost',
-              cls: 'viz-png',
-              onClick: (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                void this.exportChart(id);
-              },
-            });
-      const dataBtn =
-        id === 'line'
-          ? null
-          : button({
-              icon: 'file',
-              title: `Save the ${sec.title.toLowerCase()} chart's data as CSV (for agents)`,
-              variant: 'ghost',
-              cls: 'viz-png',
-              onClick: (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                this.exportData(id);
-              },
-            });
       const details = h(
         'details',
         { class: 'viz-section', open: !collapsed.has(sec.id) },
-        h('summary', {}, icon('chevronRight', 14), icon(sec.icon, 15), h('h2', {}, sec.title), h('span', { class: 'viz-hint' }, sec.hint), h('span', { class: 'spacer' }), scope, dataBtn, png),
+        h('summary', {}, icon('chevronRight', 14), icon(sec.icon, 15), h('h2', {}, sec.title), h('span', { class: 'viz-hint' }, sec.hint), h('span', { class: 'spacer' }), scope),
         sec.id === 'line' ? plots.el : this.charts[sec.id].body,
       ) as HTMLDetailsElement;
       details.addEventListener('toggle', () => {
@@ -208,7 +205,7 @@ export class Analysis {
         if (details.open) set.delete(sec.id);
         else set.add(sec.id);
         this.st.s.analysis.collapsed = [...set];
-        if (details.open && sec.id !== 'line') this.charts[sec.id].renderedKey = '';
+        if (details.open && sec.id !== 'line') this.charts[sec.id].invalidate();
         this.st.changed('plots');
       });
       this.sectionEls.set(sec.id, { details, scope });
@@ -275,6 +272,44 @@ export class Analysis {
 
   // -- controls ------------------------------------------------------------------------
 
+  /** The fields charted in a section: the main one, then the added ones (still numeric, no repeats). */
+  private fieldsFor(kind: RunLevelKind, r: ReturnType<Analysis['resolved']>): string[] {
+    const primary = kind === 'scatter' ? r.y : kind === 'box' ? r.boxField : r.barField;
+    if (!primary) return [];
+    const numeric = new Set(this.st.numericFields().map((f) => f.id));
+    return [...new Set([primary, ...(this.st.s.analysis.extra[kind] ?? []).filter((f) => numeric.has(f))])];
+  }
+
+  private setExtra(kind: RunLevelKind, fields: string[]): void {
+    this.st.s.analysis.extra = { ...this.st.s.analysis.extra, [kind]: fields };
+    this.st.changed('plots');
+  }
+
+  /** "Add chart": a searchable list of numeric fields; picking one adds (or removes) its chart. */
+  private addChartButton(kind: RunLevelKind, r: ReturnType<Analysis['resolved']>): HTMLButtonElement {
+    const label = kind === 'scatter' ? 'Add Y' : 'Add chart';
+    const title = kind === 'scatter' ? 'Add a chart of another Y field against the same X' : 'Add a chart of another field (same grouping and options)';
+    const b: HTMLButtonElement = button({
+      label,
+      icon: 'plus',
+      title,
+      onClick: () => {
+        const charted = new Set(this.fieldsFor(kind, r));
+        let close = () => {};
+        const pick = (v: string) => {
+          close();
+          const extra = this.st.s.analysis.extra[kind] ?? [];
+          const primary = this.fieldsFor(kind, r)[0];
+          if (v === primary) return;
+          this.setExtra(kind, extra.includes(v) ? extra.filter((f) => f !== v) : [...extra, v]);
+        };
+        close = openPopover(b, h('div', { class: 'pop-body pick-pop' }, searchList(fieldItems(this.st.numericFields()), charted, pick, 'Search fields to chart…')), { width: 300, label });
+      },
+    });
+    b.setAttribute('aria-haspopup', 'true');
+    return b;
+  }
+
   private renderControls(c: RunLevelChart, r: ReturnType<Analysis['resolved']>): void {
     const a = this.st.s.analysis;
     const numeric = this.st.numericFields();
@@ -319,6 +354,7 @@ export class Analysis {
         pick('X', fieldItems(numeric), r.x ?? '', (v) => set(v === r.x ? {} : { x: v, xLimits: AUTO_LIMITS })),
         button({ icon: 'refresh', title: 'Swap X and Y', variant: 'ghost', onClick: () => set({ x: r.y, y: r.x, xLimits: a.yLimits, yLimits: a.xLimits }) }),
         pick('Y', fieldItems(numeric), r.y ?? '', (v) => set(v === r.y ? {} : { y: v, yLimits: AUTO_LIMITS })),
+        this.addChartButton('scatter', r),
         pick('Size', fieldItems(numeric, 'none'), r.size ?? '', (v) => set({ size: v || null })),
         pick('Color', groupOpts(), a.color ?? '', (v) => set({ color: v || null }), 'Colour points by a categorical field'),
         byGroupsToggle(a.scatterByGroups, !!r.color, (v) => set({ scatterByGroups: v }), 'One point per Color group at the mean of its runs (bars: ±1 standard deviation)', 'Choose a Color field (or group the table) to plot group means'),
@@ -329,6 +365,7 @@ export class Analysis {
     } else if (c.kind === 'box') {
       c.controls.replaceChildren(
         pick('Value', fieldItems(numeric), r.boxField ?? '', (v) => set({ boxField: v })),
+        this.addChartButton('box', r),
         pick('Group', groupOpts(), a.boxGroup ?? '', (v) => set({ boxGroup: v || null }), 'One box per value of this field'),
         byGroupsToggle(a.boxMeans, true, (v) => set({ boxMeans: v }), 'Mark each box with the mean of its runs (◆)', ''),
         toggle('Log Y', a.boxLogY, (v) => set({ boxLogY: v })),
@@ -336,6 +373,7 @@ export class Analysis {
     } else {
       c.controls.replaceChildren(
         pick('Value', fieldItems(numeric), r.barField ?? '', (v) => setBar({ field: v })),
+        this.addChartButton('bar', r),
         pick('Group', groupOpts(), a.bar.group ?? '', (v) => setBar({ group: v || null }), 'Colour (per run) or aggregate (group mean) by this field'),
         byGroupsToggle(a.bar.mode === 'groups', !!r.barGroup, (v) => setBar({ mode: v ? 'groups' : 'runs' }), 'One bar per group: the mean of its runs, with a min–max whisker', 'Choose a Group field (or group the table) to plot group means'),
         select('Sort', [opt('desc', 'highest first'), opt('asc', 'lowest first'), opt('table', 'table order')], a.bar.sort, (v) => setBar({ sort: v as 'desc' | 'asc' | 'table' })),
@@ -421,8 +459,11 @@ export class Analysis {
     );
   }
 
-  /** Scatter limits to draw with: the saved ones, or automatic when they don't fit the axis. */
-  private effectiveLimits(): { x: AxisLimits; y: AxisLimits; ignored: string[] } {
+  /**
+   * Scatter limits to draw with: the saved ones, or automatic when they don't fit the axis. The Y
+   * range belongs to the main Y field; added Y charts scale automatically.
+   */
+  private effectiveLimits(primary = true): { x: AxisLimits; y: AxisLimits; ignored: string[] } {
     const a = this.st.s.analysis;
     const ignored: string[] = [];
     const pick = (l: AxisLimits, log: boolean, label: string) => {
@@ -430,78 +471,106 @@ export class Analysis {
       ignored.push(label);
       return AUTO_LIMITS;
     };
-    return { x: pick(a.xLimits, a.logX, 'X'), y: pick(a.yLimits, a.logY, 'Y'), ignored };
+    return { x: pick(a.xLimits, a.logX, 'X'), y: primary ? pick(a.yLimits, a.logY, 'Y') : AUTO_LIMITS, ignored };
   }
 
   // -- rendering -----------------------------------------------------------------------
 
   private renderChart(kind: RunLevelKind): void {
-    const c = this.charts[kind];
+    const sec = this.charts[kind];
     const r = this.resolved();
-    this.renderControls(c, r);
+    this.renderControls(sec, r);
     const { runs, scope } = this.chartRuns();
+    const fields = this.fieldsFor(kind, r);
+    // Panels are keyed by role and field, so a field that becomes the main one gets a fresh panel
+    // (the main chart has no remove button and follows its picker).
+    const wanted = fields.length ? fields.map((f, i) => `${i === 0 ? 'main' : 'extra'}:${f}`) : [''];
+    for (const [id, p] of sec.panels) {
+      if (!wanted.includes(id)) {
+        p.dispose();
+        sec.panels.delete(id);
+      }
+    }
+    wanted.forEach((id, i) => {
+      const f = fields[i] ?? '';
+      let p = sec.panels.get(id);
+      if (!p) {
+        const panel: ChartPanel = new ChartPanel(() => this.renderChart(kind), {
+          onPng: () => void this.exportChart(panel, kind),
+          onData: () => this.exportData(kind, f),
+          onRemove: i === 0 || !f ? null : () => this.setExtra(kind, (this.st.s.analysis.extra[kind] ?? []).filter((x) => x !== f)),
+        });
+        p = panel;
+        sec.panels.set(id, p);
+      }
+      if (sec.list.children[i] !== p.el) sec.list.insertBefore(p.el, sec.list.children[i] ?? null);
+      if (!f) return this.showEmpty(p, 'No numeric run-level fields found (params or metrics.json).');
+      this.renderPanel(kind, p, f, i === 0, r, runs, scope);
+    });
+  }
+
+  private renderPanel(kind: RunLevelKind, c: ChartPanel, field: string, primary: boolean, r: ReturnType<Analysis['resolved']>, runs: RunSummary[], scope: string): void {
     const width = Math.max(320, c.chartBox.clientWidth || 600);
-    const common = [kind, r, this.st.s.analysis, width, this.st.s.selected, this.st.s.focused];
+    const common = [kind, field, primary, r, this.st.s.analysis, width, this.st.s.selected, this.st.s.focused];
+    const label = this.st.fieldLabel(field);
 
     if (kind === 'scatter') {
-      if (!r.x || !r.y) return this.showEmpty(c, 'No numeric run-level fields found (params or metrics.json).');
-      const data = scatterData(runs, r.x, r.y, { sizeField: r.size, groupField: r.color });
+      if (!r.x) return this.showEmpty(c, 'No numeric run-level fields found (params or metrics.json).');
+      c.title.textContent = `${label} vs ${this.st.fieldLabel(r.x)}`;
+      const data = scatterData(runs, r.x, field, { sizeField: r.size, groupField: r.color });
       const byGroups = this.st.s.analysis.scatterByGroups && !!r.color;
       const key = JSON.stringify([...common, data, byGroups]);
       if (key === c.renderedKey) return;
       c.renderedKey = key;
-      if (byGroups) this.drawScatter(c, { ...data, points: scatterGroupMeans(data) }, r.x, r.y, null, r.color, width, runs.length, scope, true);
-      else this.drawScatter(c, data, r.x, r.y, r.size, r.color, width, runs.length, scope);
+      if (byGroups) this.drawScatter(c, { ...data, points: scatterGroupMeans(data) }, r.x, field, null, r.color, width, runs.length, scope, primary, true);
+      else this.drawScatter(c, data, r.x, field, r.size, r.color, width, runs.length, scope, primary);
     } else if (kind === 'box') {
-      if (!r.boxField) return this.showEmpty(c, 'No numeric run-level fields found (params or metrics.json).');
-      const data = boxData(runs, r.boxField, r.boxGroup);
+      c.title.textContent = label;
+      const data = boxData(runs, field, r.boxGroup);
       const key = JSON.stringify([...common, data]);
       if (key === c.renderedKey) return;
       c.renderedKey = key;
-      this.drawBox(c, data, r.boxField, r.boxGroup, width, runs.length, scope);
+      this.drawBox(c, data, field, r.boxGroup, width, runs.length, scope);
     } else {
-      if (!r.barField) return this.showEmpty(c, 'No numeric run-level fields found (params or metrics.json).');
+      c.title.textContent = label;
       const b = this.st.s.analysis.bar;
       const mode = b.mode === 'groups' && !r.barGroup ? 'runs' : b.mode;
-      const data = barData(runs, r.barField, { mode, groupField: r.barGroup, sort: b.sort, limit: BAR_LIMIT });
+      const data = barData(runs, field, { mode, groupField: r.barGroup, sort: b.sort, limit: BAR_LIMIT });
       const key = JSON.stringify([...common, data, this.st.s.colors]);
       if (key === c.renderedKey) return;
       c.renderedKey = key;
-      this.drawBar(c, data, r.barField, r.barGroup, mode, b.mode === 'groups' && !r.barGroup, width, runs.length, scope);
+      this.drawBar(c, data, field, r.barGroup, mode, b.mode === 'groups' && !r.barGroup, width, runs.length, scope);
     }
   }
 
   /**
-   * Saves a scatter / box / bar chart's data as CSV: the same run-level values the chart uses
+   * Saves one scatter / box / bar chart's data as CSV: the same run-level values the chart uses
    * (the selected or filtered runs; bar charts include runs beyond the bars drawn).
    */
-  private exportData(kind: RunLevelKind): void {
+  private exportData(kind: RunLevelKind, f: string): void {
     const r = this.resolved();
     const { runs } = this.chartRuns();
-    const label = (f: string | null) => (f ? this.st.fieldLabel(f) : '');
+    const label = (x: string | null) => (x ? this.st.fieldLabel(x) : '');
     if (kind === 'scatter') {
-      if (!r.x || !r.y) return this.st.showError('Nothing to export: choose X and Y.');
-      const d = scatterData(runs, r.x, r.y, { sizeField: r.size, groupField: r.color });
-      if (this.st.s.analysis.scatterByGroups && r.color) this.st.savePlotData(`scatter ${label(r.y)} vs ${label(r.x)} by group`, scatterGroupCsv(scatterGroupMeans(d), r.x, r.y, r.color));
-      else this.st.savePlotData(`scatter ${label(r.y)} vs ${label(r.x)}`, scatterCsv(d, r.x, r.y, r.size, r.color));
+      if (!r.x) return this.st.showError('Nothing to export: choose X and Y.');
+      const d = scatterData(runs, r.x, f, { sizeField: r.size, groupField: r.color });
+      if (this.st.s.analysis.scatterByGroups && r.color) this.st.savePlotData(`scatter ${label(f)} vs ${label(r.x)} by group`, scatterGroupCsv(scatterGroupMeans(d), r.x, f, r.color));
+      else this.st.savePlotData(`scatter ${label(f)} vs ${label(r.x)}`, scatterCsv(d, r.x, f, r.size, r.color));
     } else if (kind === 'box') {
-      if (!r.boxField) return this.st.showError('Nothing to export: choose a field.');
-      this.st.savePlotData(`box ${label(r.boxField)}`, boxCsv(boxData(runs, r.boxField, r.boxGroup), r.boxField, r.boxGroup));
+      this.st.savePlotData(`box ${label(f)}`, boxCsv(boxData(runs, f, r.boxGroup), f, r.boxGroup));
     } else {
-      if (!r.barField) return this.st.showError('Nothing to export: choose a field.');
       const b = this.st.s.analysis.bar;
       const mode = b.mode === 'groups' && r.barGroup ? 'groups' : 'runs';
-      const d = barData(runs, r.barField, { mode, groupField: r.barGroup, sort: b.sort, limit: Number.POSITIVE_INFINITY });
-      this.st.savePlotData(`bar ${label(r.barField)}`, barCsv(d, r.barField, r.barGroup, mode));
+      const d = barData(runs, f, { mode, groupField: r.barGroup, sort: b.sort, limit: Number.POSITIVE_INFINITY });
+      this.st.savePlotData(`bar ${label(f)}`, barCsv(d, f, r.barGroup, mode));
     }
   }
 
   /** Saves a scatter / box / bar chart as a 300 DPI PNG in TraceML's cache folder. */
-  private async exportChart(kind: RunLevelKind): Promise<void> {
-    const c = this.charts[kind];
+  private async exportChart(c: ChartPanel, kind: RunLevelKind): Promise<void> {
     const svg = c.chartBox.querySelector('svg');
     if (!svg) {
-      this.st.showError('Nothing to export: open the section and make sure the chart shows data.');
+      this.st.showError(`Nothing to export: make sure the ${kind} chart shows data.`);
       return;
     }
     try {
@@ -514,7 +583,7 @@ export class Analysis {
     }
   }
 
-  private showEmpty(c: RunLevelChart, msg: string): void {
+  private showEmpty(c: ChartPanel, msg: string): void {
     c.renderedKey = '';
     c.info.textContent = '';
     c.chartBox.querySelector('svg')?.remove();
@@ -544,7 +613,7 @@ export class Analysis {
     svg.append(g);
   }
 
-  private mountSvg(c: RunLevelChart, svg: SVGSVGElement, rows: Map<string, string[]>, clickable: (key: string) => boolean = () => true): void {
+  private mountSvg(c: ChartPanel, svg: SVGSVGElement, rows: Map<string, string[]>, clickable: (key: string) => boolean = () => true): void {
     c.chartBox.querySelector('svg')?.remove();
     c.chartBox.querySelector('.empty-state')?.remove();
     c.chartBox.prepend(svg);
@@ -569,7 +638,7 @@ export class Analysis {
     });
   }
 
-  private renderGroupLegend(c: RunLevelChart, labels: string[], colorOf: Map<string, number>, field: string | null): void {
+  private renderGroupLegend(c: ChartPanel, labels: string[], colorOf: Map<string, number>, field: string | null): void {
     const colors = palette();
     if (!field || labels.length === 0) {
       c.legend.replaceChildren();
@@ -582,7 +651,7 @@ export class Analysis {
   }
 
   /** `byGroups`: the points are group means (GroupPoint), drawn larger with ±1 std whiskers. */
-  private drawScatter(c: RunLevelChart, data: ScatterData, xf: string, yf: string, sizeF: string | null, colorF: string | null, w: number, total: number, scope: string, byGroups = false): void {
+  private drawScatter(c: ChartPanel, data: ScatterData, xf: string, yf: string, sizeF: string | null, colorF: string | null, w: number, total: number, scope: string, primary: boolean, byGroups = false): void {
     const { logX, logY } = this.st.s.analysis;
     const colors = palette();
     const colorOf = colorF ? this.st.groupColorIndex(colorF) : new Map<string, number>();
@@ -590,7 +659,7 @@ export class Analysis {
     // with group means, the axes also cover the ±1 std whiskers
     const spanX = byGroups ? data.points.flatMap((p) => [p.x - gp(p).sx, p.x + gp(p).sx]) : data.points.map((p) => p.x);
     const spanY = byGroups ? data.points.flatMap((p) => [p.y - gp(p).sy, p.y + gp(p).sy]) : data.points.map((p) => p.y);
-    const lim = this.effectiveLimits();
+    const lim = this.effectiveLimits(primary);
     const xs = makeScale(spanX, M.l, w - M.r, logX, false, lim.x);
     const ys = makeScale(spanY, CHART_H - M.b, M.t, logY, false, lim.y);
     const plottable = data.points.filter((p) => xs.valid(p.x) && ys.valid(p.y));
@@ -674,7 +743,7 @@ export class Analysis {
     this.renderGroupLegend(c, colorF ? data.groups : [], colorOf, colorF);
   }
 
-  private drawBox(c: RunLevelChart, data: BoxData, field: string, groupF: string | null, minW: number, total: number, scope: string): void {
+  private drawBox(c: ChartPanel, data: BoxData, field: string, groupF: string | null, minW: number, total: number, scope: string): void {
     const logY = this.st.s.analysis.boxLogY;
     const colors = palette();
     const colorOf = groupF ? this.st.groupColorIndex(groupF) : new Map<string, number>();
@@ -752,7 +821,7 @@ export class Analysis {
   }
 
   /** Horizontal bars (names stay readable): one per run, or one per group with a min–max range. */
-  private drawBar(c: RunLevelChart, data: BarData, field: string, groupF: string | null, mode: 'runs' | 'groups', groupsNeedGroup: boolean, w: number, total: number, scope: string): void {
+  private drawBar(c: ChartPanel, data: BarData, field: string, groupF: string | null, mode: 'runs' | 'groups', groupsNeedGroup: boolean, w: number, total: number, scope: string): void {
     if (!data.bars.length) return this.showEmpty(c, `No ${scope} run has a numeric value for ${this.st.fieldLabel(field)}.`);
     const colors = palette();
     const colorOf = groupF ? this.st.groupColorIndex(groupF) : new Map<string, number>();

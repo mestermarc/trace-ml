@@ -89,6 +89,8 @@ class TraceMLController implements vscode.Disposable {
   private lastPlot: { path: string; csv: boolean } | null = null;
   /** Runs deleted from TraceML (hidden; never discovered or read again until restored). */
   private hidden = new Map<string, HiddenRun>();
+  /** Sub-folders of the runs folders that are not runs, by their mtime (re-checked once they change). */
+  private readonly notRuns = new Map<string, number>();
   /** The run index and the hidden-runs list are read once, on the first scan. */
   private cacheLoaded = false;
   private indexTimer: ReturnType<typeof setTimeout> | undefined;
@@ -403,6 +405,7 @@ class TraceMLController implements vscode.Disposable {
   private async tick(): Promise<void> {
     const force = this.forceNext;
     this.forceNext = false;
+    if (force) this.notRuns.clear();
     // Only the configured runs folders are looked at: no workspace-wide search.
     const folders = (vscode.workspace.workspaceFolders ?? [])
       .filter((f) => f.uri.scheme === 'file')
@@ -425,8 +428,7 @@ class TraceMLController implements vscode.Disposable {
     const discovered: DiscoveredRun[] = [];
     const seen = new Set<string>();
     for (const root of this.roots) {
-      for (const run of await listRuns(root, known)) {
-        if (this.hidden.has(run.key)) continue;
+      for (const run of await listRuns(root, known, { notRuns: this.notRuns, skip: (key) => this.hidden.has(key) })) {
         if (!seen.has(run.key)) {
           seen.add(run.key);
           discovered.push(run);

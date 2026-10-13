@@ -49,13 +49,12 @@ export interface MeanSeries {
 }
 
 /**
- * The group-mean curve of several runs' series for one metric. Points are matched by step (by
- * epoch in epoch mode); in wall-time mode the x of a step is the mean wall time of the runs there.
- * Each run counts once per step (its last value, as in the single-run curves). A step where no
- * run has a value is a gap. With logY, non-positive means become gaps.
+ * The values of several runs' series at each x. Points are matched by step (by epoch in epoch
+ * mode); in wall-time mode the x of a step is the mean wall time of the runs there. Each run counts
+ * once per step (its last value, as in the single-run curves). Sorted by x.
  */
-export function groupMeanSeries(series: readonly SeriesPayload[], xMode: XMode, logY: boolean): MeanSeries {
-  const acc = new Map<number, { sum: number; n: number; wall: number; wn: number }>();
+function valuesByX(series: readonly SeriesPayload[], xMode: XMode): { x: number; values: number[] }[] {
+  const acc = new Map<number, { values: number[]; wall: number; wn: number }>();
   for (const p of series) {
     const perRun = new Map<number, { y: number | null; wall: number | null }>();
     for (let i = 0; i < p.y.length; i++) {
@@ -65,11 +64,8 @@ export function groupMeanSeries(series: readonly SeriesPayload[], xMode: XMode, 
     }
     for (const [key, v] of perRun) {
       let a = acc.get(key);
-      if (!a) acc.set(key, (a = { sum: 0, n: 0, wall: 0, wn: 0 }));
-      if (v.y !== null && Number.isFinite(v.y)) {
-        a.sum += v.y;
-        a.n++;
-      }
+      if (!a) acc.set(key, (a = { values: [], wall: 0, wn: 0 }));
+      if (v.y !== null && Number.isFinite(v.y)) a.values.push(v.y);
       if (v.wall !== null && Number.isFinite(v.wall)) {
         a.wall += v.wall;
         a.wn++;
@@ -78,13 +74,58 @@ export function groupMeanSeries(series: readonly SeriesPayload[], xMode: XMode, 
   }
   const pts = [...acc].flatMap(([key, a]) => {
     const x = xMode === 'wall' ? (a.wn ? a.wall / a.wn : null) : key;
-    if (x === null) return [];
-    let y: number | null = a.n ? a.sum / a.n : null;
-    if (logY && y !== null && y <= 0) y = null;
-    return [{ x, y, n: a.n }];
+    return x === null ? [] : [{ x, values: a.values }];
   });
-  pts.sort((p, q) => p.x - q.x);
+  return pts.sort((p, q) => p.x - q.x);
+}
+
+/**
+ * The group-mean curve of several runs' series for one metric (points matched as in valuesByX).
+ * A step where no run has a value is a gap. With logY, non-positive means become gaps.
+ */
+export function groupMeanSeries(series: readonly SeriesPayload[], xMode: XMode, logY: boolean): MeanSeries {
+  const pts = valuesByX(series, xMode).map(({ x, values }) => {
+    let y: number | null = values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
+    if (logY && y !== null && y <= 0) y = null;
+    return { x, y, n: values.length };
+  });
   return { x: pts.map((p) => p.x), y: pts.map((p) => p.y), n: pts.map((p) => p.n) };
+}
+
+/** Linear-interpolated quantile (q in [0, 1]) of ascending-sorted values. */
+export function quantileSorted(sorted: readonly number[], q: number): number {
+  if (sorted.length === 1) return sorted[0]!;
+  const pos = (sorted.length - 1) * q;
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (pos - lo);
+}
+
+export interface SpreadSeries {
+  x: number[];
+  median: (number | null)[];
+  /** 25th and 75th percentile (the interquartile range). */
+  lo: (number | null)[];
+  hi: (number | null)[];
+  /** Number of runs with a value at each point. */
+  n: number[];
+}
+
+/**
+ * Median and interquartile range of several runs' series at each x (points matched as in
+ * valuesByX): the summary line of many runs. With logY, non-positive values are left out.
+ */
+export function spreadSeries(series: readonly SeriesPayload[], xMode: XMode, logY: boolean): SpreadSeries {
+  const out: SpreadSeries = { x: [], median: [], lo: [], hi: [], n: [] };
+  for (const { x, values } of valuesByX(series, xMode)) {
+    const v = (logY ? values.filter((y) => y > 0) : values).sort((a, b) => a - b);
+    out.x.push(x);
+    out.n.push(v.length);
+    out.median.push(v.length ? quantileSorted(v, 0.5) : null);
+    out.lo.push(v.length ? quantileSorted(v, 0.25) : null);
+    out.hi.push(v.length ? quantileSorted(v, 0.75) : null);
+  }
+  return out;
 }
 
 export interface GroupPoint extends ScatterPoint {

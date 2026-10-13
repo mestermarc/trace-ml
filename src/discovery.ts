@@ -1,12 +1,28 @@
 // Run discovery. TraceML only looks inside the runs folders the user configured in `traceml.roots`
 // (no recursive search of the workspace). Each direct sub-directory with a marker file is a run.
 // Runs whose real location (after symlinks) is outside their runs folder are ignored.
+// Candidate folders are never listed: only the fixed marker names are stat'ed, so a folder full of
+// checkpoints, datasets or other large files costs a few stat calls. Folders found not to be runs
+// are remembered by their modification time and skipped until something is added to them.
 import { promises as fs, type Dirent } from 'node:fs';
 import { isInside, realpathSafe } from './fsGuard';
 import { basename, hasGlobChars, isAbsolutePath, joinPath, normalizePath, relativePath } from './paths';
 
 /** Files that make a directory qualify as a run. */
 export const RUN_MARKERS = ['run.json', 'metrics.json', 'metrics.jsonl', 'params.yaml', 'config.json'] as const;
+
+/** Sub-folders of a runs folder that are never runs (tooling caches), skipped without a look. */
+export const SKIPPED_DIRS: ReadonlySet<string> = new Set(['node_modules', '__pycache__']);
+
+export interface ListOptions {
+  /**
+   * Folders already found not to be runs: run key -> the folder's mtime at that check. Updated in
+   * place; a folder is checked again only once its mtime changes (a file was added or removed).
+   */
+  notRuns?: Map<string, number>;
+  /** Folders to leave out without checking (e.g. runs deleted from TraceML). */
+  skip?: (key: string) => boolean;
+}
 
 export interface FolderLike {
   name: string;
@@ -90,37 +106,63 @@ export async function resolveRunsRoots(folders: readonly FolderLike[], entries: 
   return { roots: [...roots.values()], problems };
 }
 
-/** True if the directory entries contain a run marker file. */
-export function hasRunMarker(names: Iterable<string>): boolean {
-  for (const n of names) if ((RUN_MARKERS as readonly string[]).includes(n)) return true;
+/** True if the folder contains a run marker file: stats the fixed names, never lists the folder. */
+export async function hasRunMarkerFile(dir: string): Promise<boolean> {
+  for (const name of RUN_MARKERS) {
+    try {
+      if ((await fs.stat(joinPath(dir, name))).isFile()) return true;
+    } catch {
+      // missing
+    }
+  }
   return false;
 }
 
 /**
  * Lists run directories directly inside a runs root. `known` maps already-discovered run keys to
- * their real path, so steady-state polling costs one readdir per root.
+ * their real path, and `opts.notRuns` remembers folders that are not runs, so steady-state polling
+ * costs one readdir per root plus one stat per non-run folder.
  */
-export async function listRuns(root: RunsRoot, known: ReadonlyMap<string, string>): Promise<DiscoveredRun[]> {
+export async function listRuns(root: RunsRoot, known: ReadonlyMap<string, string>, opts: ListOptions = {}): Promise<DiscoveredRun[]> {
   const out: DiscoveredRun[] = [];
+  const seen = new Set<string>();
   for (const ent of await readDirSafe(root.real)) {
     if (ent.name.startsWith('.')) continue; // temporary
+    if (SKIPPED_DIRS.has(ent.name)) continue;
+    // Files (checkpoints, archives, datasets...) are never runs and are not looked at.
     if (!ent.isDirectory() && !ent.isSymbolicLink()) continue;
     const dir = joinPath(root.dir, ent.name);
+    if (opts.skip?.(dir)) continue;
     let real = known.get(dir);
     if (real === undefined) {
       const r = await realpathSafe(joinPath(root.real, ent.name));
       // Symlinked runs must stay inside the runs folder.
       if (!r || !isInside(root.real, r) || r === root.real) continue;
+      let mtime: number;
       try {
-        if (!(await fs.stat(r)).isDirectory()) continue;
+        const st = await fs.stat(r);
+        if (!st.isDirectory()) continue;
+        mtime = st.mtimeMs;
       } catch {
         continue;
       }
-      const names = (await readDirSafe(r)).map((e) => e.name);
-      if (!hasRunMarker(names)) continue;
+      seen.add(dir);
+      if (opts.notRuns?.get(dir) === mtime) continue;
+      if (!(await hasRunMarkerFile(r))) {
+        opts.notRuns?.set(dir, mtime);
+        continue;
+      }
+      opts.notRuns?.delete(dir);
       real = r;
     }
     out.push({ key: dir, dir, real, dirName: ent.name, location: root.label ? `${root.label}/${ent.name}` : ent.name });
+  }
+  // forget folders that are gone from this root
+  if (opts.notRuns) {
+    for (const k of opts.notRuns.keys()) {
+      const rel = relativePath(root.dir, k);
+      if (rel && !rel.includes('/') && !seen.has(k)) opts.notRuns.delete(k);
+    }
   }
   return out;
 }
