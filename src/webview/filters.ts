@@ -129,6 +129,8 @@ export class Toolbar {
       title: 'Save the rows shown in the table (filters, sort, column order and Max rows applied) as a CSV file an agent or pandas can read',
       onClick: () => st.exportTable(),
     });
+    // an exported dashboard (snapshot in a browser) has no host to write the CSV
+    this.exportBtn.hidden = !!st.snapshot;
     // Max rows: pick a preset or type any whole number up to MAX_ROWS_LIMIT ("All" = no limit).
     const maxRowsHelp = `Maximum number of rows shown in the table (applied after filters and sorting). Type any number from 1 to ${MAX_ROWS_LIMIT}, or All.`;
     this.maxRows = h('input', {

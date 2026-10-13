@@ -1,12 +1,14 @@
 // The only place where TraceML writes files: its cache folder (default `<workspace>/traceml/.cache`,
 // setting `traceml.cacheDir`). It holds the remembered view, the run index, the list of runs
-// deleted from TraceML, table exports (CSV) and saved plots (PNG). File names are fixed or checked
+// deleted from TraceML, table exports (CSV), saved plots (PNG) and exported dashboards (HTML). File names are fixed or checked
 // against a strict pattern, never taken from webview input as is; run data is never touched.
 import * as vscode from 'vscode';
+import { DASHBOARD_NAME } from './dashboardHtml';
 
 /** Older timestamped exports / plots beyond these counts are pruned (latest.csv is always kept). */
 export const KEEP_EXPORTS = 20;
 export const KEEP_PLOTS = 50;
+export const KEEP_DASHBOARDS = 20;
 export const LATEST_EXPORT = 'latest.csv';
 export const UI_STATE_FILE = 'ui-state.json';
 export const RUNS_INDEX_FILE = 'runs-index.json';
@@ -25,10 +27,24 @@ export const PLOT_DATA_NAME = /^plot-[a-z0-9_-]{1,60}-\d{8}-\d{6}(?:-\d{1,3})?\.
 export class CacheStore {
   private readonly exportsDir: vscode.Uri;
   private readonly plotsDir: vscode.Uri;
+  private readonly dashboardsDir: vscode.Uri;
 
   constructor(readonly dir: vscode.Uri) {
     this.exportsDir = vscode.Uri.joinPath(dir, 'exports');
     this.plotsDir = vscode.Uri.joinPath(dir, 'plots');
+    this.dashboardsDir = vscode.Uri.joinPath(dir, 'dashboards');
+  }
+
+  // -- exported dashboards -----------------------------------------------------
+
+  /** Writes `dashboards/<name>` (a self-contained HTML snapshot); returns its path. */
+  async writeDashboard(name: string, text: string): Promise<vscode.Uri> {
+    if (!DASHBOARD_NAME.test(name)) throw new Error(`invalid dashboard file name: ${name}`);
+    await vscode.workspace.fs.createDirectory(this.dashboardsDir);
+    const file = vscode.Uri.joinPath(this.dashboardsDir, name);
+    await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(text));
+    await this.prune(this.dashboardsDir, DASHBOARD_NAME, KEEP_DASHBOARDS);
+    return file;
   }
 
   // -- table exports ---------------------------------------------------------

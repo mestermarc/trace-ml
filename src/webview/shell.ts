@@ -38,6 +38,7 @@ export class Shell {
   private readonly headerStatus = h('div', { class: 'header-status' });
   private readonly refreshed = h('span', { class: 'refreshed' });
   private readonly refreshBtn: HTMLButtonElement;
+  private readonly dashboardBtn: HTMLButtonElement;
   private readonly errorBar = h('div', { class: 'error-bar', role: 'alert' });
   private readonly noticeBar = h('div', { class: 'export-bar notice-bar', role: 'status' });
   private noticeKey = '';
@@ -48,6 +49,7 @@ export class Shell {
     const collapseBtn = button({ icon: 'chevronLeft', title: 'Collapse sidebar', variant: 'ghost', cls: 'collapse-btn', onClick: () => this.toggleSidebar() });
     const settings = h('button', { type: 'button', class: 'nav-item', title: 'TraceML settings' }, icon('settings'), h('span', { class: 'nav-label' }, 'Settings'));
     settings.addEventListener('click', () => st.post({ type: 'openSettings' }));
+    settings.hidden = !!st.snapshot;
 
     this.sidebar = h(
       'aside',
@@ -64,14 +66,26 @@ export class Shell {
     );
 
     this.refreshBtn = button({ label: 'Refresh', icon: 'refresh', variant: 'secondary', title: 'Rescan runs now', onClick: () => st.refreshNow() });
+    this.dashboardBtn = button({
+      label: 'Export dashboard',
+      icon: 'download',
+      variant: 'secondary',
+      title: 'Save this dashboard as one HTML file anyone can open in a browser (no VS Code, no runs folder): the filtered runs, charts of the selected runs, and the current view. Saved in the TraceML cache folder.',
+      onClick: () => st.exportDashboard(),
+    });
+    // An exported dashboard is a read-only snapshot: no rescans, no re-export.
+    const snapshotBadge = st.snapshot
+      ? h('span', { class: 'snapshot-badge', title: 'Read-only snapshot exported from TraceML. Charts are included for the runs that were selected at export time.' }, `Snapshot · exported ${st.snapshot.slice(0, 16).replace('T', ' ')} UTC`)
+      : null;
     const header = h(
       'header',
       { class: 'app-header' },
       this.headerTitle,
       h('div', { class: 'spacer' }),
       this.headerStatus,
-      this.refreshed,
-      this.refreshBtn,
+      snapshotBadge ?? this.refreshed,
+      st.snapshot ? null : this.dashboardBtn,
+      st.snapshot ? null : this.refreshBtn,
     );
     this.errorBar.hidden = true;
     this.noticeBar.hidden = true;
@@ -205,6 +219,8 @@ export class Shell {
     );
     this.refreshed.title = `Polling every ${this.st.config.refreshIntervalSeconds}s`;
     this.refreshBtn.disabled = this.st.refreshing;
+    this.dashboardBtn.disabled = this.st.exportingDashboard;
+    this.dashboardBtn.classList.toggle('busy', this.st.exportingDashboard);
   }
 
   /** Result of the last export / plot save / delete, with Copy path / Open / Undo actions. */
@@ -236,6 +252,15 @@ export class Shell {
         path(n.path, 'Saved plot'),
         button({ label: 'Copy path', icon: 'check', variant: 'secondary', cls: 'btn-small', onClick: () => this.st.post({ type: 'copyPlotPath' }) }),
         button({ label: 'Open', variant: 'ghost', cls: 'btn-small', title: 'Open the image', onClick: () => this.st.post({ type: 'openPlot' }) }),
+      ];
+    } else if (n.kind === 'dashboard') {
+      const size = n.bytes >= 1048576 ? `${(n.bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n.bytes / 1024))} KB`;
+      parts = [
+        icon('download', 15),
+        h('span', {}, `Exported dashboard (${n.runs} run${n.runs === 1 ? '' : 's'}, charts for ${n.chartRuns}, ${size}) to `),
+        path(n.path, 'One HTML file: send it or put it on a web server; it opens in any browser'),
+        button({ label: 'Copy path', icon: 'check', variant: 'secondary', cls: 'btn-small', onClick: () => this.st.post({ type: 'copyDashboardPath' }) }),
+        button({ label: 'Open in browser', variant: 'ghost', cls: 'btn-small', title: 'Open the dashboard in your default browser', onClick: () => this.st.post({ type: 'openDashboard' }) }),
       ];
     } else if (n.kind === 'plotData') {
       parts = [

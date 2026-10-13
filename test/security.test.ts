@@ -56,8 +56,9 @@ describe('TraceML source is read-only', () => {
     const c = ALL.find((x) => x.file === 'cacheStore.ts')!.text;
     expect(c).toMatch(/this\.exportsDir = vscode\.Uri\.joinPath\(dir, 'exports'\)/);
     expect(c).toMatch(/this\.plotsDir = vscode\.Uri\.joinPath\(dir, 'plots'\)/);
+    expect(c).toMatch(/this\.dashboardsDir = vscode\.Uri\.joinPath\(dir, 'dashboards'\)/);
     // every write / delete / mkdir targets the cache folder or a fixed name joined onto it
-    const allowedTargets = ['this.dir', 'this.exportsDir', 'this.plotsDir', 'file', 'latest', 'ui', 'idx', 'hidden', 'tmp', 'vscode.Uri.joinPath(dir'];
+    const allowedTargets = ['this.dir', 'this.exportsDir', 'this.plotsDir', 'this.dashboardsDir', 'file', 'latest', 'ui', 'idx', 'hidden', 'tmp', 'vscode.Uri.joinPath(dir'];
     const calls = [...c.matchAll(/workspace\.fs\.(writeFile|delete|createDirectory)\(([^,)]*)/g)];
     expect(calls.length).toBeGreaterThan(0);
     for (const m of calls) expect(allowedTargets, `${m[1]}(${m[2]})`).toContain(m[2]!.trim());
@@ -68,7 +69,9 @@ describe('TraceML source is read-only', () => {
     expect(c).toMatch(/if \(!PLOT_NAME\.test\(name\)\) throw/);
     // prune() only deletes files of the folder it lists that match the strict name pattern
     expect(c).toMatch(/\.filter\(\(\[n, t\]\) => t === vscode\.FileType\.File && pattern\.test\(n\)\)/);
-    expect(c.match(/this\.prune\(/g)).toHaveLength(3);
+    expect(c.match(/this\.prune\(/g)).toHaveLength(4);
+    expect(c).toMatch(/if \(!DASHBOARD_NAME\.test\(name\)\) throw/);
+    expect(c).toMatch(/this\.prune\(this\.dashboardsDir, DASHBOARD_NAME, KEEP_DASHBOARDS\)/);
     expect(c).toMatch(/if \(!PLOT_DATA_NAME\.test\(name\)\) throw/);
     expect(c).toMatch(/this\.prune\(this\.plotsDir, PLOT_DATA_NAME, KEEP_PLOTS\)/);
     expect(c).toMatch(/this\.prune\(this\.exportsDir, EXPORT_NAME, KEEP_EXPORTS\)/);

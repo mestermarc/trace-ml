@@ -19,6 +19,7 @@ export type Notice =
   | { kind: 'export'; path: string; rows: number }
   | { kind: 'plot'; path: string; width: number; height: number }
   | { kind: 'plotData'; path: string; rows: number }
+  | { kind: 'dashboard'; path: string; runs: number; chartRuns: number; bytes: number }
   | { kind: 'deleted'; keys: string[]; names: string[] };
 
 /** One row of the (possibly grouped) run table. */
@@ -171,6 +172,12 @@ export class AppState {
   /** Result bar (export / saved plot / deleted runs); null = hidden. */
   notice: Notice | null = null;
   exporting = false;
+  exportingDashboard = false;
+  /**
+   * Set when this page is an exported dashboard (a read-only snapshot opened in a browser): the
+   * export time (ISO). Host-only actions are hidden then.
+   */
+  readonly snapshot: string | null = document.querySelector('meta[name="traceml-snapshot"]')?.getAttribute('content') || null;
   /** Runs deleted from TraceML (hidden by the host; folders untouched). */
   hiddenRuns: HiddenRun[] = [];
   s: PersistedState;
@@ -274,6 +281,7 @@ export class AppState {
       case 'error':
         this.error = msg.message;
         this.exporting = false;
+        this.exportingDashboard = false;
         this.changed('status', 'toolbar');
         break;
       case 'exported':
@@ -283,6 +291,11 @@ export class AppState {
         break;
       case 'plotDataSaved':
         this.notice = { kind: 'plotData', path: msg.path, rows: msg.rows };
+        this.changed('status');
+        break;
+      case 'dashboardExported':
+        this.exportingDashboard = false;
+        this.notice = { kind: 'dashboard', path: msg.path, runs: msg.runs, chartRuns: msg.chartRuns, bytes: msg.bytes };
         this.changed('status');
         break;
       case 'plotSaved':
@@ -578,6 +591,19 @@ export class AppState {
       },
     });
     this.changed('toolbar');
+  }
+
+  /**
+   * Asks the host to export a self-contained HTML dashboard: the filtered runs, with metric
+   * histories and details for the selected runs, opening with the current view.
+   */
+  exportDashboard(): void {
+    if (this.exportingDashboard) return;
+    this.exportingDashboard = true;
+    const keys = new Set(this.filteredRuns().map((r) => r.key));
+    for (const r of this.selectedRuns()) keys.add(r.key);
+    this.post({ type: 'exportDashboard', runKeys: [...keys], chartKeys: this.selectedRuns().slice(0, 50).map((r) => r.key), state: this.s as unknown as Record<string, unknown> });
+    this.changed('status');
   }
 
   refreshNow(): void {
