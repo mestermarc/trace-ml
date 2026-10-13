@@ -16,8 +16,13 @@ import { basename, joinPath } from './paths';
 import type { Cached, IndexedRun, Stamp } from './runIndex';
 import { RUN_FILES, type MetricsSummary, type RunDetail, type RunMeta, type RunSummary, type Scalar, type SeriesPayload } from './types';
 
-/** run.json / params.yaml / metrics.json / config.json larger than this are not parsed (they are small by contract). */
-export const MAX_SMALL_FILE_BYTES = 16 * 1024 * 1024;
+/**
+ * run.json / params.yaml / metrics.json larger than this are not parsed: they are read on every
+ * scan where they changed and are small by contract (kilobytes).
+ */
+export const MAX_SMALL_FILE_BYTES = 4 * 1024 * 1024;
+/** config.json is read only when a run's details are opened, so it may be larger. */
+export const MAX_DETAIL_FILE_BYTES = 16 * 1024 * 1024;
 
 const empty = <T>(): Cached<T> => ({ stamp: null, value: null, error: null, warnings: [] });
 
@@ -98,7 +103,7 @@ async function refreshCached<T>(cache: Cached<T>, path: string, allowedReal: str
     return true;
   }
   if (stamp.size > MAX_SMALL_FILE_BYTES) {
-    Object.assign(cache, empty<T>(), { stamp, error: `${basename(path)}: file is ${Math.round(stamp.size / 1048576)} MB, larger than the 16 MB limit; not parsed` });
+    Object.assign(cache, empty<T>(), { stamp, error: `${basename(path)}: file is ${Math.round(stamp.size / 1048576)} MB, larger than the ${MAX_SMALL_FILE_BYTES / 1048576} MB limit; not parsed` });
     return true;
   }
   let text: string;
@@ -415,8 +420,8 @@ export class RunStore {
     const cfg = await guardedStat(joinPath(dir, 'config.json'), real);
     if (cfg.outside) configError = outsideMessage('config.json');
     else if (cfg.real && cfg.stamp) {
-      if (cfg.stamp.size > MAX_SMALL_FILE_BYTES) {
-        configError = `config.json is ${Math.round(cfg.stamp.size / 1048576)} MB, larger than the 16 MB limit; open the file instead`;
+      if (cfg.stamp.size > MAX_DETAIL_FILE_BYTES) {
+        configError = `config.json is ${Math.round(cfg.stamp.size / 1048576)} MB, larger than the ${MAX_DETAIL_FILE_BYTES / 1048576} MB limit; open the file instead`;
       } else {
         try {
           const r = parseConfigJson(await fs.readFile(cfg.real, 'utf-8'));

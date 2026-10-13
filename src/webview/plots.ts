@@ -2,9 +2,10 @@
 // chart per metric with one line per selected run. Zoom is kept across live updates.
 import uPlot from 'uplot';
 import { groupLabel } from '../model/analysis';
-import { groupMeanSeries, plotGroups } from '../model/groupAgg';
+import { groupMeanSeries, plotGroups, spreadSeries } from '../model/groupAgg';
+import { AUTO_ALL_MAX, DEFAULT_TOP_N, effectiveLineMode, parseTopN, resolveDirection, topLineKeys, type LineMode, type RankDir } from '../model/lineDisplay';
 import { emaSmooth, seriesXY, type XMode } from '../model/metricSeries';
-import type { RunSummary } from '../types';
+import type { RunSummary, SeriesPayload } from '../types';
 import { cssVar, formatClock, formatNumber, h, palette, withAlpha } from './dom';
 import { EXPORT_SCALE, composePng } from './pngExport';
 import { MAX_PLOT_RUNS, seriesId, type AppState, type Area } from './state';
@@ -36,7 +37,10 @@ export function chartTheme() {
   };
 }
 
-/** One plotted line: a run, or (Plot by groups) the mean of a group's runs. */
+/**
+ * One plotted line: a run, or (Plot by groups) the mean of a group's runs, or (Median + IQR) the
+ * median of all plotted runs. `faint` runs are drawn thin and pale behind the median line.
+ */
 interface RunLine {
   key: string;
   name: string;
@@ -44,8 +48,18 @@ interface RunLine {
   x: number[];
   y: (number | null)[];
   total: number;
-  /** Group lines: number of runs behind each point, by x. */
+  /** Group / median lines: number of runs behind each point, by x. */
   nAt?: Map<number, number>;
+  role?: 'faint' | 'median';
+  /** Median line: 25th / 75th percentile at each x (the band). */
+  lo?: (number | null)[];
+  hi?: (number | null)[];
+}
+
+/** What one uPlot data column (after x) shows: a line's raw values, its main curve, or a band edge. */
+interface ColMeta {
+  line: number;
+  kind: 'raw' | 'main' | 'lo' | 'hi';
 }
 
 /** A group of plotted runs (Plot by groups). */
@@ -55,10 +69,16 @@ export interface PlotGroup {
   runs: RunSummary[];
 }
 
-function runLine(st: AppState, run: RunSummary, metric: string, xMode: XMode, logY: boolean, color: string): RunLine | null {
-  const p = st.series.get(seriesId(run.key, metric));
-  if (!p) return null;
-  return { key: run.key, name: run.name, color, ...seriesXY(p, xMode, logY), total: p.total };
+const LINE_MODES: readonly LineMode[] = ['auto', 'all', 'top', 'spread'];
+const LINE_MODE_LABEL: Record<LineMode, string> = { auto: 'Auto', all: 'All runs', top: 'Top N', spread: 'Median + IQR' };
+
+/** Line display settings, sanitized (the saved state may come from an older or edited file). */
+export function lineDisplay(p: AppState['s']['plot']): { mode: LineMode; topN: number; rank: RankDir } {
+  return {
+    mode: LINE_MODES.includes(p.lineMode) ? p.lineMode : 'auto',
+    topN: Number.isInteger(p.topN) && p.topN >= 1 && p.topN <= 100 ? p.topN : DEFAULT_TOP_N,
+    rank: p.rank === 'min' || p.rank === 'max' ? p.rank : 'auto',
+  };
 }
 
 class ChartCard {
@@ -71,8 +91,9 @@ class ChartCard {
   private extent: [number, number] | null = null;
   private tooltip: HTMLElement | null = null;
   private lines: RunLine[] = [];
-  private smoothing = 0;
+  private cols: ColMeta[] = [];
   private focusedSeries = -1;
+  private hotLine = -1;
   private noteKey = '';
   /** What the chart currently shows, so it can be re-rendered at export resolution. */
   private shown: { data: uPlot.AlignedData; xMode: XMode; logY: boolean; smooth: boolean } | null = null;
@@ -80,7 +101,7 @@ class ChartCard {
   constructor(readonly metric: string, onRemove: () => void, onExport: () => void, onData: () => void) {
     this.info = h('span', { class: 'chart-info' });
     this.note = h('div', { class: 'chart-note' });
-    this.body = h('div', { class: 'chart-body', title: 'Drag to zoom · double-click to reset' }, this.note);
+    this.body = h('div', { class: 'chart-body', title: 'Drag to zoom · double-click to reset · hover a line to highlight it' }, this.note);
     const remove = button({ icon: 'close', title: `Remove ${metric}`, variant: 'ghost', cls: 'chart-remove', onClick: onRemove });
     const png = button({ icon: 'download', title: `Save ${metric} as PNG (300 DPI)`, variant: 'ghost', cls: 'chart-remove', onClick: onExport });
     const data = button({ icon: 'file', title: `Save the data of ${metric} as CSV (full history, for agents)`, variant: 'ghost', cls: 'chart-remove', onClick: onData });
@@ -94,10 +115,12 @@ class ChartCard {
 
   update(st: AppState, runs: RunSummary[], themeVersion: number, colorFor: (run: RunSummary) => string, groups: PlotGroup[] | null = null): void {
     const { xMode, logY, smoothing, hidden } = st.s.plot;
+    const display = lineDisplay(st.s.plot);
     const hiddenSet = new Set(hidden);
-    const lines: RunLine[] = [];
+    let lines: RunLine[] = [];
     let loading = 0;
     let downsampled = 0;
+    let modeInfo = '';
     // Plot by groups: one line per group, the mean of its runs at each step.
     for (const g of groups ?? []) {
       const series = [];
@@ -117,22 +140,45 @@ class ChartCard {
       if (!m.x.length) continue;
       lines.push({ key: `group:${g.label}`, name: `${g.label} (mean of ${series.length})`, color: g.color, x: m.x, y: m.y, total: m.x.length, nAt: new Map(m.x.map((x, i) => [x, m.n[i]!])) });
     }
+    const payloads: SeriesPayload[] = [];
     for (const run of groups ? [] : runs) {
       if (hiddenSet.has(run.key)) continue;
-      const l = runLine(st, run, this.metric, xMode, logY, colorFor(run));
-      if (!l) {
+      const p = st.series.get(seriesId(run.key, this.metric));
+      if (!p) {
         loading++;
         continue;
       }
+      const l: RunLine = { key: run.key, name: run.name, color: colorFor(run), ...seriesXY(p, xMode, logY), total: p.total };
       if (l.x.length === 0) continue;
       if (l.total > l.y.length) downsampled++;
       lines.push(l);
+      payloads.push(p);
+    }
+    // Many runs: draw the best N for this metric, or a median + IQR band over faint run lines.
+    // The focused run (table click / legend double-click) is always drawn as a full line.
+    const mode = groups ? 'all' : effectiveLineMode(display.mode, lines.length);
+    const focused = st.s.focused;
+    if (mode === 'top' && lines.length > display.topN) {
+      const dir = resolveDirection(display.rank, this.metric);
+      const keep = new Set(topLineKeys(lines, display.topN, dir));
+      if (focused) keep.add(focused);
+      const total = lines.length;
+      lines = lines.filter((l) => keep.has(l.key));
+      modeInfo = `top ${Math.min(display.topN, total)} of ${total} (${dir === 'min' ? 'lowest' : 'highest'} final)`;
+    } else if (mode === 'spread' && lines.length > 1) {
+      const s = spreadSeries(payloads, xMode, logY);
+      const runLines = lines.map((l): RunLine => (l.key === focused ? l : { ...l, role: 'faint' }));
+      const median: RunLine = { key: 'median', name: `median of ${lines.length} runs`, color: cssVar('--tm-text', '#e4e7ec'), x: s.x, y: s.median, lo: s.lo, hi: s.hi, total: s.x.length, nAt: new Map(s.x.map((x, i) => [x, s.n[i]!])), role: 'median' };
+      // the focused run goes last so it is drawn on top of the band
+      const focusLine = runLines.find((l) => l.key === focused && !l.role);
+      lines = [...runLines.filter((l) => l !== focusLine), median, ...(focusLine ? [focusLine] : [])];
+      modeInfo = `median + IQR of ${payloads.length} runs`;
     }
     this.lines = lines;
-    this.smoothing = smoothing;
 
     const points = lines.reduce((a, l) => a + l.x.length, 0);
-    this.info.textContent = [lines.length ? `${lines.length} ${groups ? 'group' : 'run'}${lines.length === 1 ? '' : 's'}` : '', downsampled ? 'downsampled' : '', loading && lines.length ? `loading ${loading}…` : '']
+    const counted = lines.filter((l) => l.role !== 'median').length;
+    this.info.textContent = [modeInfo || (counted ? `${counted} ${groups ? 'group' : 'run'}${counted === 1 ? '' : 's'}` : ''), downsampled ? 'downsampled' : '', loading && lines.length ? `loading ${loading}…` : '']
       .filter(Boolean)
       .join(' · ');
     this.info.title = `${points} points drawn${downsampled ? `; series longer than ${st.config.maxPointsPerSeries} points use min/max-preserving downsampling` : ''}`;
@@ -156,13 +202,13 @@ class ChartCard {
     this.note.hidden = true;
 
     const smooth = smoothing > 0;
-    const tables: uPlot.AlignedData[] = lines.map((l) => (smooth ? [l.x, l.y, emaSmooth(l.y, smoothing)] : [l.x, l.y]) as uPlot.AlignedData);
-    const data = tables.length === 1 ? tables[0]! : uPlot.join(tables);
+    const { data, cols } = this.layout(lines, smoothing);
+    this.cols = cols;
     const xs = data[0] as number[];
     const extent: [number, number] | null = xs.length ? [xs[0]!, xs[xs.length - 1]!] : null;
 
     this.shown = { data, xMode, logY, smooth };
-    const sig = JSON.stringify([xMode, logY, smooth, lines.map((l) => [l.key, l.color, l.name]), themeVersion]);
+    const sig = JSON.stringify([xMode, logY, smooth, lines.map((l) => [l.key, l.color, l.name, l.role]), themeVersion]);
     const width = Math.max(200, this.body.clientWidth || 400);
     if (this.chart && sig === this.sig) {
       // Live update: keep the user's zoom if they zoomed in, otherwise follow the growing data.
@@ -177,23 +223,65 @@ class ChartCard {
     this.destroy();
     this.sig = sig;
     this.extent = extent;
-    this.chart = new uPlot(this.options(lines, xMode, logY, smooth, width), data, this.body);
+    this.chart = new uPlot(this.options(lines, cols, xMode, logY, width), data, this.body);
     this.tooltip = h('div', { class: 'chart-tooltip', role: 'tooltip' });
     this.tooltip.hidden = true;
     this.chart.over.append(this.tooltip);
   }
 
   /**
+   * Data columns per line: raw + smoothed (smoothing on) or the values; faint run lines only their
+   * curve; the median line its curve plus the band edges. Returns the joined data and what each
+   * column (after x) shows.
+   */
+  private layout(lines: RunLine[], smoothing: number): { data: uPlot.AlignedData; cols: ColMeta[] } {
+    const smooth = smoothing > 0;
+    const sm = (y: (number | null)[]) => (smooth ? emaSmooth(y, smoothing) : y);
+    const cols: ColMeta[] = [];
+    const tables = lines.map((l, line) => {
+      const t: (number | null)[][] = [];
+      if (l.role === 'median') {
+        t.push(sm(l.y), sm(l.lo ?? []), sm(l.hi ?? []));
+        cols.push({ line, kind: 'main' }, { line, kind: 'lo' }, { line, kind: 'hi' });
+      } else if (smooth && l.role !== 'faint') {
+        t.push(l.y, sm(l.y));
+        cols.push({ line, kind: 'raw' }, { line, kind: 'main' });
+      } else {
+        t.push(sm(l.y));
+        cols.push({ line, kind: 'main' });
+      }
+      return [l.x, ...t] as uPlot.AlignedData;
+    });
+    return { data: tables.length === 1 ? tables[0]! : uPlot.join(tables), cols };
+  }
+
+  /** Stroke width and colour of a data column, normal and highlighted (hovered line). */
+  private style(l: RunLine, c: ColMeta, smooth: boolean, k: number): { stroke: string; width: number; hot: { stroke: string; width: number } } {
+    if (c.kind === 'lo' || c.kind === 'hi') return { stroke: 'transparent', width: 0, hot: { stroke: 'transparent', width: 0 } };
+    if (c.kind === 'raw') return { stroke: withAlpha(l.color, 0.25), width: 1 * k, hot: { stroke: withAlpha(l.color, 0.45), width: 1.4 * k } };
+    if (l.role === 'faint') return { stroke: withAlpha(l.color, 0.22), width: 1 * k, hot: { stroke: l.color, width: 2.6 * k } };
+    const w = l.role === 'median' ? 2.4 : smooth ? 2 : l.nAt ? 2.2 : 1.6;
+    return { stroke: l.color, width: w * k, hot: { stroke: l.color, width: (w + 1.6) * k } };
+  }
+
+  /**
    * uPlot options. `k` scales every size (fonts, strokes, axis sizes) for the PNG export, where the
    * chart is drawn `k` times larger than on screen.
    */
-  private options(lines: RunLine[], xMode: XMode, logY: boolean, smooth: boolean, width: number, k = 1): uPlot.Options {
+  private options(lines: RunLine[], cols: ColMeta[], xMode: XMode, logY: boolean, width: number, k = 1): uPlot.Options {
     const t = chartTheme();
+    const smooth = cols.some((c) => c.kind === 'raw');
     const series: uPlot.Series[] = [{ label: X_LABEL[xMode] }];
-    for (const l of lines) {
-      if (smooth) series.push({ label: `${l.name} (raw)`, stroke: withAlpha(l.color, 0.25), width: 1 * k, points: { show: false } });
-      series.push({ label: l.name, stroke: l.color, width: (smooth ? 2 : l.nAt ? 2.2 : 1.6) * k, points: { size: 5 * k, fill: l.color } });
-    }
+    const bands: uPlot.Band[] = [];
+    const styles = cols.map((c) => this.style(lines[c.line]!, c, smooth, k));
+    cols.forEach((c, i) => {
+      const l = lines[c.line]!;
+      const st = styles[i]!;
+      const label = c.kind === 'raw' ? `${l.name} (raw)` : c.kind === 'lo' ? `${l.name} 25%` : c.kind === 'hi' ? `${l.name} 75%` : l.name;
+      const points = c.kind === 'main' && l.role !== 'faint' ? { size: 5 * k, fill: l.color } : { show: false };
+      series.push({ label, stroke: st.stroke, width: st.width, points });
+      if (c.kind === 'hi') bands.push({ series: [i + 1, i], fill: withAlpha(l.color, 0.16) });
+    });
     const axis = (values?: uPlot.Axis['values']): uPlot.Axis => ({
       stroke: t.axis,
       font: t.font.replace(/(\d+(?:\.\d+)?)px/, (_m, n: string) => `${Number(n) * k}px`),
@@ -216,17 +304,35 @@ class ChartCard {
         { ...axis((_u, vals) => vals.map((v) => (v === null ? '' : formatNumber(v)))), size: 54 * k, space: 30 * k },
       ],
       series,
+      bands,
       cursor: { sync: { key: 'traceml' }, drag: { x: true, y: false }, points: { size: 7 }, focus: { prox: 24 } },
       hooks: {
         setCursor: [(u) => this.showTooltip(u, xMode)],
         setSeries: [
           (u, idx) => {
             this.focusedSeries = idx ?? -1;
+            this.highlight(u, idx ?? null, styles);
             this.showTooltip(u, xMode);
           },
         ],
       },
     };
+  }
+
+  /** Thickens (and, for faint run lines, brightens) the line under the cursor; the rest dims. */
+  private highlight(u: uPlot, idx: number | null, styles: ReturnType<ChartCard['style']>[]): void {
+    const line = idx !== null && idx > 0 ? (this.cols[idx - 1]?.line ?? -1) : -1;
+    if (line === this.hotLine) return;
+    this.hotLine = line;
+    this.cols.forEach((c, i) => {
+      const s = u.series[i + 1];
+      const st = styles[i];
+      if (!s || !st) return;
+      const look = c.line === line ? st.hot : st;
+      s.width = look.width;
+      s.stroke = () => look.stroke;
+    });
+    u.redraw(false);
   }
 
   private showTooltip(u: uPlot, xMode: XMode): void {
@@ -239,21 +345,25 @@ class ChartCard {
     }
     const x = u.data[0][idx];
     const rows: Node[] = [h('div', { class: 'tt-x' }, `${X_LABEL[xMode]} ${x === undefined || x === null ? '' : xMode === 'wall' ? formatClock(x) : formatNumber(x)}`)];
-    const perRun = this.smoothing > 0 ? 2 : 1;
+    const hotLine = this.focusedSeries > 0 ? (this.cols[this.focusedSeries - 1]?.line ?? -1) : -1;
+    const at = (col: number) => (col < 0 ? undefined : u.data[col + 1]?.[idx]);
     this.lines.forEach((l, i) => {
-      const smoothedCol = 1 + i * perRun + (perRun - 1);
-      const rawCol = 1 + i * perRun;
-      const v = u.data[smoothedCol]?.[idx];
+      // Faint run lines (Median + IQR) are listed only while hovered; the median row stands for them.
+      if (l.role === 'faint' && i !== hotLine) return;
+      const col = (kind: ColMeta['kind']) => this.cols.findIndex((c) => c.line === i && c.kind === kind);
+      const v = at(col('main'));
       if (v === undefined) return;
-      const raw = perRun === 2 ? u.data[rawCol]?.[idx] : undefined;
-      const hot = this.focusedSeries === smoothedCol || this.focusedSeries === rawCol;
+      const raw = at(col('raw'));
+      const lo = at(col('lo'));
+      const hi = at(col('hi'));
       rows.push(
         h(
           'div',
-          { class: `tt-row${hot ? ' hot' : ''}` },
+          { class: `tt-row${i === hotLine ? ' hot' : ''}` },
           h('span', { class: 'swatch', style: `background:${l.color}` }),
           h('span', { class: 'tt-name' }, l.name),
           h('span', { class: 'tt-val' }, v === null ? '—' : formatNumber(v)),
+          lo !== undefined && lo !== null && hi !== undefined && hi !== null ? h('span', { class: 'tt-raw' }, `IQR ${formatNumber(lo)} – ${formatNumber(hi)}`) : null,
           l.nAt && typeof x === 'number' && l.nAt.has(x) ? h('span', { class: 'tt-raw' }, `n=${l.nAt.get(x)}`) : null,
           raw !== undefined && raw !== null ? h('span', { class: 'tt-raw' }, formatNumber(raw)) : null,
         ),
@@ -279,12 +389,12 @@ class ChartCard {
    */
   async toPng(subtitle: string): Promise<string | null> {
     if (!this.chart || !this.shown) return null;
-    const { data, xMode, logY, smooth } = this.shown;
+    const { data, xMode, logY } = this.shown;
     const width = this.chart.width;
     // uPlot already multiplies by the device pixel ratio; scale the rest so pixels = CSS px * 300/96.
     const pxRatio = (uPlot as unknown as { pxRatio?: number }).pxRatio || window.devicePixelRatio || 1;
     const k = EXPORT_SCALE / pxRatio;
-    const opts = this.options(this.lines, xMode, logY, smooth, width * k, k);
+    const opts = this.options(this.lines, this.cols, xMode, logY, width * k, k);
     const sx = this.chart.scales.x;
     const sy = this.chart.scales.y;
     opts.cursor = { show: false };
@@ -307,7 +417,9 @@ class ChartCard {
         chart: u.ctx.canvas,
         width,
         height: CHART_H,
-        legend: this.lines.map((l) => ({ color: l.color, label: l.name })),
+        legend: this.lines.flatMap((l) =>
+          l.role === 'faint' ? [] : l.role === 'median' ? [{ color: l.color, label: l.name }, { color: withAlpha(l.color, 0.35), label: '25–75% of runs (IQR)' }] : [{ color: l.color, label: l.name }],
+        ),
       });
       u.destroy();
       return png;
@@ -328,6 +440,8 @@ class ChartCard {
     this.chart = null;
     this.tooltip = null;
     this.sig = '';
+    this.hotLine = -1;
+    this.focusedSeries = -1;
   }
 }
 
@@ -470,7 +584,8 @@ export class Plots {
 
   private renderControls(): void {
     const p = this.st.s.plot;
-    const key = JSON.stringify([p.xMode, p.logY, p.colorBy, p.byGroups, !!this.st.groupField()]);
+    const display = lineDisplay(p);
+    const key = JSON.stringify([p.xMode, p.logY, p.colorBy, p.byGroups, !!this.st.groupField(), display]);
     if (key === this.controlsKey) return;
     this.controlsKey = key;
     const xSelect = h('select', { 'aria-label': 'X axis' }, ...(['step', 'epoch', 'wall'] as XMode[]).map((m) => h('option', { value: m, selected: p.xMode === m }, X_LABEL[m])));
@@ -499,7 +614,47 @@ export class Plots {
     }, this.st.groupField() ? 'One line per table group: the mean of its selected runs at each step' : 'Group the table (Group) to plot group means');
     if (!this.st.groupField()) byGroups.classList.add('disabled');
     (byGroups.querySelector('input') as HTMLInputElement).disabled = !this.st.groupField();
+    // Lines: what to draw when many runs are plotted (ignored while plotting by groups).
+    const grouped = p.byGroups && !!this.st.groupField();
+    const modeSelect = h(
+      'select',
+      { 'aria-label': 'Lines', disabled: grouped },
+      ...LINE_MODES.map((m) => h('option', { value: m, selected: display.mode === m }, m === 'auto' ? `Auto (all up to ${AUTO_ALL_MAX}, then top N)` : m === 'top' ? `Top ${display.topN}` : LINE_MODE_LABEL[m])),
+    );
+    modeSelect.value = display.mode;
+    modeSelect.addEventListener('change', () => {
+      p.lineMode = modeSelect.value as LineMode;
+      this.st.changed('plots');
+    });
+    const ranked = display.mode === 'top' || display.mode === 'auto';
+    const topInput = h('input', { type: 'number', min: 1, max: 100, step: 1, value: display.topN, class: 'num-input', 'aria-label': 'Number of best runs to draw', disabled: grouped });
+    topInput.addEventListener('change', () => {
+      const n = parseTopN(topInput.value);
+      if (n === null) topInput.value = String(display.topN);
+      else {
+        p.topN = n;
+        this.st.changed('plots');
+      }
+    });
+    const rankSelect = h(
+      'select',
+      { 'aria-label': 'Best runs are', disabled: grouped },
+      h('option', { value: 'auto', selected: display.rank === 'auto' }, 'auto (lower for loss / error)'),
+      h('option', { value: 'min', selected: display.rank === 'min' }, 'lowest final'),
+      h('option', { value: 'max', selected: display.rank === 'max' }, 'highest final'),
+    );
+    rankSelect.value = display.rank;
+    rankSelect.addEventListener('change', () => {
+      p.rank = rankSelect.value as RankDir;
+      this.st.changed('plots');
+    });
+    const linesTitle = grouped
+      ? 'Plot by groups draws one mean line per group'
+      : 'Many runs: draw only the best N per chart (by final value), or the median with the 25–75% band over faint run lines. The focused run (click a row) is always drawn; hover a line to highlight it.';
     this.controls.replaceChildren(
+      h('label', { class: 'field', title: linesTitle }, h('span', { class: 'field-label' }, 'Lines'), modeSelect),
+      ranked ? h('label', { class: 'field', title: 'How many runs Top N draws per chart' }, h('span', { class: 'field-label' }, 'N'), topInput) : '',
+      ranked ? h('label', { class: 'field', title: 'Which final values count as best for Top N' }, h('span', { class: 'field-label' }, 'Best'), rankSelect) : '',
       h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'X'), xSelect),
       toggle('Log Y', p.logY, (v) => {
         p.logY = v;

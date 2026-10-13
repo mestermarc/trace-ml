@@ -1,4 +1,4 @@
-import { appendFileSync, cpSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, mkdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { listRuns, resolveRunsRoots, type DiscoveredRun } from '../src/discovery';
@@ -74,6 +74,42 @@ describe('discovery (configured runs folders only)', () => {
     const { roots, problems } = await resolveRunsRoots([{ name: 'ws', fsPath: ws }], ['**/runs']);
     expect(roots).toEqual([]);
     expect(problems[0]).toMatch(/pattern/);
+  });
+
+  it('skips files, tooling folders and folders whose marker name is not a file', async () => {
+    const runs = join(ws, 'exp', 'runs');
+    writeFileSync(join(runs, 'checkpoint.pt'), 'binary');
+    mkdirSync(join(runs, 'node_modules', 'x'), { recursive: true });
+    writeFileSync(join(runs, 'node_modules', 'run.json'), '{}');
+    mkdirSync(join(runs, '__pycache__'), { recursive: true });
+    writeFileSync(join(runs, '__pycache__', 'metrics.json'), '{}');
+    mkdirSync(join(runs, 'dataset', 'run.json'), { recursive: true }); // a folder named like a marker
+    const names = (await discover(ws, ['exp/runs'])).map((r) => r.dirName);
+    expect(names).toEqual(['corrupt-run', 'future-run', 'legacy-run', 'normal-run']);
+  });
+
+  it('remembers non-run folders until they change, and can skip folders without a look', async () => {
+    const runs = join(ws, 'exp', 'runs');
+    const { roots } = await resolveRunsRoots([{ name: 'ws', fsPath: ws }], ['exp/runs']);
+    const notRuns = new Map<string, number>();
+    const list = async (skip?: (k: string) => boolean) => (await listRuns(roots[0]!, new Map(), { notRuns, skip })).map((r) => r.dirName).sort();
+    expect(await list()).not.toContain('not-a-run');
+    const key = normalizePath(join(runs, 'not-a-run'));
+    expect(notRuns.has(key)).toBe(true);
+    // unchanged folder: not checked again (a marker slipped in with the old mtime is not seen)
+    const mtime = notRuns.get(key)!;
+    writeFileSync(join(runs, 'not-a-run', 'run.json'), '{}');
+    notRuns.set(key, statSync(join(runs, 'not-a-run')).mtimeMs);
+    expect(await list()).not.toContain('not-a-run');
+    // once the folder's mtime differs from the remembered one, it is checked again and found
+    notRuns.set(key, mtime - 1000);
+    expect(await list()).toContain('not-a-run');
+    expect(notRuns.has(key)).toBe(false);
+    // skipped folders are left out; removed folders are forgotten
+    expect(await list((k) => k.endsWith('/normal-run'))).not.toContain('normal-run');
+    notRuns.set(normalizePath(join(runs, 'gone')), 1);
+    await list();
+    expect(notRuns.has(normalizePath(join(runs, 'gone')))).toBe(false);
   });
 
   it('ignores a run directory that is a symlink pointing outside the runs folder', async () => {
@@ -176,6 +212,19 @@ describe('RunStore', () => {
     expect(l).toMatchObject({ config: null, configError: null, meta: null });
   });
 
+  it('scan-time files over 4 MB are skipped; config.json (read on demand) up to 16 MB', async () => {
+    const s = store();
+    writeFileSync(join(runsDir, 'normal-run', 'metrics.json'), Buffer.alloc(5 * 1024 * 1024, 0x20));
+    writeFileSync(join(runsDir, 'normal-run', 'config.json'), `{"pad": "${'x'.repeat(5 * 1024 * 1024)}"}`);
+    await s.sync(await discover(ws));
+    const key = normalizePath(join(runsDir, 'normal-run'));
+    const summary = s.summaries().find((r) => r.key === key)!;
+    expect(summary.warnings.some((w) => w.startsWith('metrics.json: file is 5 MB, larger than the 4 MB limit'))).toBe(true);
+    const detail = await s.loadDetail(key);
+    expect(detail?.configError).toBeNull();
+    expect((detail?.config as { pad: string }).pad.length).toBe(5 * 1024 * 1024);
+  });
+
   it('refuses to parse oversized small files (memory guard)', async () => {
     const s = store();
     writeFileSync(join(runsDir, 'normal-run', 'config.json'), Buffer.alloc(17 * 1024 * 1024, 0x20));
@@ -183,7 +232,7 @@ describe('RunStore', () => {
     await s.sync(await discover(ws));
     const key = normalizePath(join(runsDir, 'normal-run'));
     const summary = s.summaries().find((r) => r.key === key)!;
-    expect(summary.warnings.some((w) => w.startsWith('params.yaml: file is 17 MB, larger than the 16 MB limit'))).toBe(true);
+    expect(summary.warnings.some((w) => w.startsWith('params.yaml: file is 17 MB, larger than the 4 MB limit'))).toBe(true);
     expect(summary.params).toEqual({});
     expect((await s.loadDetail(key))?.configError).toMatch(/config\.json is 17 MB/);
   });

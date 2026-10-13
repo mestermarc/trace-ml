@@ -2,6 +2,7 @@
 import { defaultVisibleColumns, differingParams, filterRuns, isDateColumn, limitRows, moveColumn, pruneSelection, type FilterState } from '../model/filters';
 export { MAX_ROWS_LIMIT, parseMaxRows } from '../model/filters';
 import { combinedGroupField, groupFieldParts, groupRuns, type AxisLimits, type RunGroup } from '../model/analysis';
+import type { LineMode, RankDir } from '../model/lineDisplay';
 import type { XMode } from '../model/metricSeries';
 import { dynamicColumns, sortRuns, type ColumnDef, type SortKey, FIXED_COLUMNS, OPTIONAL_FIXED_COLUMNS, parseColumnId } from '../model/run';
 import type { HiddenRun } from '../model/hiddenRuns';
@@ -53,6 +54,11 @@ export interface PersistedState {
     colorBy: 'run' | 'group';
     /** "Plot by groups": one mean curve per table group instead of one line per run. */
     byGroups: boolean;
+    /** Lines drawn when many runs are plotted: all, the best `topN` per chart, or median + IQR band. */
+    lineMode: LineMode;
+    topN: number;
+    /** Which end of the metric is best for "Top N" ('auto' guesses from the metric name). */
+    rank: RankDir;
   };
   /** Table grouping fields (column ids), in order; runs are grouped by their unique combinations. Empty = no grouping. */
   groupBy: string[];
@@ -87,6 +93,11 @@ export interface PersistedState {
     boxMeans: boolean;
     /** Visualization sections the user collapsed ('line' | 'scatter' | 'box' | 'bar'). */
     collapsed: string[];
+    /**
+     * More charts per section, like the Line view's one chart per metric: extra Y fields for the
+     * scatter (same X), extra Value fields for the box and bar charts. Each gets its own chart.
+     */
+    extra: { scatter: string[]; box: string[]; bar: string[] };
   };
   colors: Record<string, number>;
   tableHeight: number;
@@ -110,7 +121,7 @@ const DEFAULT_STATE: PersistedState = {
   maxRows: 100,
   showFirst: false,
   columnWidths: {},
-  plot: { metrics: null, xMode: 'step', logY: false, smoothing: 0, hidden: [], colorBy: 'run', byGroups: false },
+  plot: { metrics: null, xMode: 'step', logY: false, smoothing: 0, hidden: [], colorBy: 'run', byGroups: false, lineMode: 'auto', topN: 10, rank: 'auto' },
   groupBy: [],
   collapsedGroups: [],
   analysis: {
@@ -130,6 +141,7 @@ const DEFAULT_STATE: PersistedState = {
     scatterByGroups: false,
     boxMeans: false,
     collapsed: [],
+    extra: { scatter: [], box: [], bar: [] },
   },
   colors: {},
   tableHeight: 320,
@@ -178,7 +190,12 @@ export class AppState {
             ...structuredClone(DEFAULT_STATE),
             ...saved,
             plot: { ...DEFAULT_STATE.plot, ...(saved.plot ?? {}) },
-            analysis: { ...DEFAULT_STATE.analysis, ...(saved.analysis ?? {}), bar: { ...DEFAULT_STATE.analysis.bar, ...(saved.analysis?.bar ?? {}) } },
+            analysis: {
+              ...DEFAULT_STATE.analysis,
+              ...(saved.analysis ?? {}),
+              bar: { ...DEFAULT_STATE.analysis.bar, ...(saved.analysis?.bar ?? {}) },
+              extra: { ...DEFAULT_STATE.analysis.extra, ...(saved.analysis?.extra ?? {}) },
+            },
             groupBy: savedGroupBy(saved.groupBy),
           }
         : structuredClone(DEFAULT_STATE);

@@ -127,6 +127,7 @@ input[type='text'],
 input[type='search'],
 input[type='date'],
 input[type='time'],
+input[type='number'],
 select {
   height: 28px;
   padding: 0 var(--tm-space-2);
@@ -143,6 +144,7 @@ input[type='text']:hover,
 input[type='search']:hover,
 input[type='date']:hover,
 input[type='time']:hover,
+input[type='number']:hover,
 select:hover {
   border-color: var(--tm-border-strong);
 }
@@ -151,6 +153,7 @@ input[type='text']:focus,
 input[type='search']:focus,
 input[type='date']:focus,
 input[type='time']:focus,
+input[type='number']:focus,
 select:focus {
   border-color: var(--tm-accent);
   box-shadow: var(--tm-focus);
@@ -1535,7 +1538,24 @@ input[type='checkbox'].switch-input::after {
   background: var(--tm-surface-hover);
 }
 
-/* scatter / box */
+/* scatter / box / bar: one panel per charted field, stacked */
+.run-level-panels {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tm-space-4);
+}
+
+.run-level-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tm-space-2);
+  min-width: 0;
+}
+
+.run-level-panel > .chart-head {
+  padding-left: 0;
+}
+
 .analysis-info {
   font-size: var(--tm-fs-sm);
   color: var(--tm-text-muted);
@@ -2464,6 +2484,11 @@ tr.cmp-section th {
 
 .limit-input {
   width: 72px;
+}
+
+/* line view: "Top N" count */
+.num-input {
+  width: 58px;
 }
 
 .limit-input.invalid {

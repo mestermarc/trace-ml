@@ -302,7 +302,13 @@ TraceML uses a dark-only application shell with its own design system, inside a 
       - *+ Metrics* opens a searchable picker grouped into TRAIN / VAL / TEST / SYSTEM / OTHER. The plotted metrics appear as removable chips.
       - The x-axis can show step, epoch, or wall time (relative to `started_at`). There's also Log Y, EMA smoothing from 0 to 0.99 (with the raw line kept faintly visible), and *Colour by group*.
       - Each chart shows one metric with one line per run. Each run keeps a stable color.
-      - Hovering highlights the nearest line and shows a tooltip. Click a legend entry to hide or show a run, or double-click it to open the run.
+      - Hovering a line **highlights it** (drawn thicker, the others dimmed) and shows a tooltip. Click a legend entry to hide or show a run, or double-click it to open the run.
+      - **Lines** controls what is drawn when many runs are plotted, so the chart stays readable:
+        - *Auto* (default): every run while there are at most 15, then *Top N*.
+        - *All runs*: one line per run.
+        - *Top N*: per chart, only the N best runs by their final value of that metric (*N* 1–100, default 10). *Best* is *auto* (lower for losses, errors, perplexity, MSE…, higher for everything else), *lowest final* or *highest final*. The chart header shows e.g. "top 10 of 28 (lowest final)".
+        - *Median + IQR*: the median of all plotted runs with a band from the 25th to the 75th percentile at each step, over the individual runs drawn thin and pale. Hover a pale line to bring that run forward (it is highlighted and listed in the tooltip).
+        - Individual runs stay reachable in every mode: the **focused run** (click a table row, or double-click a legend entry) is always drawn as a full line, and runs hidden in the legend are left out of the ranking and the median. *Plot by groups* replaces these modes with one mean line per group.
       - Drag across a chart to zoom, and double-click to reset. Live updates keep your zoom.
       - The ⤓ button on a chart saves it as a **300 DPI PNG** (title, chart and legend, at the current zoom) to `traceml/.cache/plots/`. A bar shows the path, with *Copy path* and *Open*.
       - The 🗎 button saves the chart's **data as CSV** instead, for agents: the full (not downsampled) history of the metric for the plotted runs, one row per logged value (`run,path,step,epoch,time_s,<metric>`). See [Exporting chart data](#exporting-chart-data).
@@ -320,7 +326,8 @@ TraceML uses a dark-only application shell with its own design system, inside a 
       - *One per run* draws horizontal bars, colored by the Group field if one is set, with at most 60 bars; filter to narrow down. Click a bar to open the run.
       - **Plot by groups** draws one bar per group (the group mean) with a whisker from min to max and the run count.
       - Sort by highest first, lowest first or table order. *Start at zero* (on by default) keeps bar lengths honest; turn it off to fit the axis to the data range. Sorting is a display choice only; TraceML never ranks runs.
-    - The ⤓ button in the Scatter, Box and Bar section headers saves that chart as a 300 DPI PNG, like the line charts. The 🗎 button next to it saves the chart's data as CSV.
+    - **Several charts per section**, like the Line view's one chart per metric: *Add Y* (scatter) or *Add chart* (box, bar) opens a searchable list of numeric fields; each pick adds a chart of that field below the first one. The scatter charts share X, Size, Color, Log and the X range (the Y range applies to the first chart; added ones scale automatically); box and bar charts share the grouping and options. Remove an added chart with its ✕, or pick it again in the list.
+    - Each Scatter, Box and Bar chart has its own ⤓ button (300 DPI PNG, like the line charts) and 🗎 button (the chart's data as CSV).
 - **Remembered view:** the plotted metrics, selected runs, filters, sort order, columns and their order, grouping, chart settings and collapsed sections are restored when you reopen TraceML or reload the window. They're saved in `traceml/.cache/ui-state.json` (see `traceml.cacheDir`).
 - **Run inspector:** a side panel that opens when you click a run in any view.
   - *Header:* name, status, group, start time, tags and id, plus *Select* and *Delete* (hide from TraceML; files are not touched) buttons.
@@ -369,6 +376,7 @@ This section is the **authoritative specification** for producing runs that Trac
 - **Dot files:** files and directories starting with `.` are ignored. Use them for temporary files (see the write rules).
 - **What counts as a run:** a directory is a run if it contains at least one of `run.json`, `metrics.json`, `metrics.jsonl`, `params.yaml` or `config.json`.
 - **Depth:** only the **direct** sub-directories of a runs folder are runs. Nested runs are not discovered.
+- **What is never looked at:** files directly in a runs folder (checkpoints, archives, datasets), `node_modules` and `__pycache__` folders, and anything inside a run folder other than the fixed file names above. To decide whether a folder is a run, TraceML checks only those five names; it never lists the folder, so a folder with thousands of checkpoint files costs a few `stat` calls.
 
 ### 2. Write rules (important for live viewing)
 
@@ -379,7 +387,7 @@ TraceML reads these files while training is still writing them. Follow these rul
 3. **Use UTF-8 everywhere, and put timestamps in UTC ISO-8601** (`2026-09-29T13:46:00Z`) in `run.json` and `metrics.json`. In `metrics.jsonl`, `time` is Unix seconds (a float).
 4. **Keep the heartbeat fresh.** While running, update `run.json.heartbeat_at` at least every 30 s. A running run whose heartbeat is older than `traceml.staleAfterSeconds` (default 60 s) is shown as **stale**.
 5. **Always finish the run.** On exit, set `status` (`completed`, `failed` or `killed`), `ended_at`, `duration_s` and `exit`, even when an exception occurs. Use `try/finally` or a context manager.
-6. **Keep the small files small.** `run.json`, `params.yaml`, `metrics.json` and `config.json` over 16 MB are not parsed.
+6. **Keep the small files small.** `run.json`, `params.yaml` and `metrics.json` over 4 MB, and `config.json` over 16 MB, are not parsed. Put large data in `artifacts/`, which TraceML never reads.
 
 ### 3. `run.json`
 
@@ -808,11 +816,12 @@ What the extension can and cannot do:
   - The webview can't touch the filesystem. It sends a fixed set of typed messages, and the extension validates each one.
 - **Untrusted run files are handled defensively.**
   - JSON, YAML and JSONL parsing never executes anything. YAML alias expansion is capped (billion-laughs protection).
-  - `run.json`, `params.yaml`, `metrics.json` and `config.json` over 16 MB are not parsed. `metrics.jsonl` is read up to `traceml.maxMetricsFileMB`.
+  - `run.json`, `params.yaml` and `metrics.json` over 4 MB, and `config.json` (read only when a run's details are opened) over 16 MB, are not parsed. `metrics.jsonl` is read up to `traceml.maxMetricsFileMB`, and only for plotted runs (other runs read just its first 64 KB).
   - A corrupt file only produces a warning on that run.
 - **Filesystem load** is bounded:
   - Polling only runs while the TraceML panel is open **and visible**. Nothing is read when it's closed or in a background tab; it refreshes as soon as you switch back. The default is every 5 s. Finished runs are only re-checked on *Refresh*.
   - Each poll reads each configured runs folder once, plus the core files of the running runs in it. Unchanged files are skipped by modification time and size. On startup the run index avoids re-parsing unchanged runs.
+  - Sub-folders that aren't runs are remembered by their modification time and not checked again until something is added to them (or you press *Refresh*). Runs deleted from TraceML are skipped without being read.
   - On slow network filesystems (e.g. NFS on a cluster), raise `traceml.refreshIntervalSeconds` and narrow `traceml.roots`.
 - **Dependencies:** at runtime only `yaml`, `uplot` and `sql.js` (SQLite compiled to WebAssembly; its `.wasm` is loaded from the extension's own `dist/` folder as bytes, never fetched), bundled into `dist/`. `npm audit` reports 0 known vulnerabilities.
 - **CPU:** the extension host runs JavaScript on a single thread, so parsing never uses more than one CPU core. A thread limit wouldn't change anything. Big files are read in 8 MB chunks, and `traceml.maxMetricsFileMB` caps the total per run.
