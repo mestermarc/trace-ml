@@ -2,7 +2,7 @@
   "name": "traceml",
   "displayName": "TraceML",
   "description": "Read-only, filesystem-only viewer for ML training runs (tables, plots, comparison) inside VS Code. Works over Remote-SSH.",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "publisher": "mestermarc",
   "license": "MIT",
   "repository": {
