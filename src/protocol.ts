@@ -20,7 +20,9 @@ export type HostToWebview =
   /** Show this run (from the activity-bar view): Runs view + inspector. */
   | { type: 'focusRun'; runKey: string }
   /** A chart's data was saved as CSV. */
-  | { type: 'plotDataSaved'; path: string; rows: number };
+  | { type: 'plotDataSaved'; path: string; rows: number }
+  /** A dashboard snapshot was written: its path, run count, runs with charts and size. */
+  | { type: 'dashboardExported'; path: string; runs: number; chartRuns: number; bytes: number };
 
 export type WebviewToHost =
   | { type: 'ready' }
@@ -48,7 +50,14 @@ export type WebviewToHost =
   /** Save a line chart's data: the host writes the full history of `metric` for these runs. */
   | { type: 'saveLineData'; metric: string; runKeys: string[]; groups?: Record<string, string> }
   | { type: 'copyPlotPath' }
-  | { type: 'openPlot' };
+  | { type: 'openPlot' }
+  /**
+   * Export a self-contained HTML dashboard: `runKeys` are the runs in the table (filters applied),
+   * `chartKeys` the plotted runs whose metric histories and details are included, `state` the view.
+   */
+  | { type: 'exportDashboard'; runKeys: string[]; chartKeys: string[]; state: Record<string, unknown> }
+  | { type: 'copyDashboardPath' }
+  | { type: 'openDashboard' };
 
 /** What the table currently shows; the host turns this into the export snapshot. */
 export type ExportRequest = TableExportRequest;
@@ -108,7 +117,23 @@ export function parseWebviewMessage(msg: unknown): WebviewToHost | null {
     case 'openExport':
     case 'copyPlotPath':
     case 'openPlot':
+    case 'copyDashboardPath':
+    case 'openDashboard':
       return { type: m.type };
+    case 'exportDashboard':
+      if (
+        isStringArray(m.runKeys) &&
+        m.runKeys.length <= MAX_EXPORT_RUNS &&
+        isStringArray(m.chartKeys) &&
+        m.chartKeys.length <= 1000 &&
+        typeof m.state === 'object' &&
+        m.state !== null &&
+        !Array.isArray(m.state) &&
+        JSON.stringify(m.state).length <= MAX_UI_STATE_BYTES
+      ) {
+        return { type: 'exportDashboard', runKeys: m.runKeys, chartKeys: m.chartKeys, state: m.state as Record<string, unknown> };
+      }
+      return null;
     case 'hideRuns':
     case 'unhideRuns':
       return isStringArray(m.runKeys) && m.runKeys.length <= 100_000 ? { type: m.type, runKeys: m.runKeys } : null;

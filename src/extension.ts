@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import { listRuns, resolveRunsRoots, type DiscoveredRun, type RunsRoot } from './discovery';
 import { DEFAULT_CACHE_DIR, resolveCacheDirPath } from './cacheDir';
 import { CacheStore } from './cacheStore';
+import { anonymizeKeys, buildDashboardHtml, dashboardStamp } from './dashboardHtml';
 import { RunsTreeProvider, runKeyOf } from './explorerView';
 import { parseHiddenRuns, serializeHiddenRuns, type HiddenRun } from './model/hiddenRuns';
 import { MAX_PNG_BYTES, isPng, pngSize, setPngDpi } from './model/png';
@@ -15,9 +16,11 @@ import { parseRunIndex, serializeRunIndex } from './runIndex';
 import { Poller } from './poller';
 import { parseWebviewMessage, type ExportRequest, type HostToWebview, type WebviewToHost } from './protocol';
 import { RunStore } from './runStore';
-import type { RunSummary, SeriesPayload, ViewConfig } from './types';
+import type { RunDetail, RunSummary, SeriesPayload, ViewConfig } from './types';
 
 const VIEW_TYPE = 'traceml.experiments';
+/** Runs whose metric histories and details go into an exported dashboard (the plotted runs). */
+const MAX_DASHBOARD_CHART_RUNS = 50;
 /** Where versions <= 0.1.8 remembered the view (read once as a fallback, never written). */
 const LEGACY_UI_STATE_KEY = 'traceml.uiState';
 const SERIES_PER_MESSAGE = 16;
@@ -87,6 +90,7 @@ class TraceMLController implements vscode.Disposable {
   private readonly readonlyFiles = new ReadonlyRunFiles();
   private lastExport: { file: string; latest: string } | null = null;
   private lastPlot: { path: string; csv: boolean } | null = null;
+  private lastDashboard: string | null = null;
   /** Runs deleted from TraceML (hidden; never discovered or read again until restored). */
   private hidden = new Map<string, HiddenRun>();
   /** Sub-folders of the runs folders that are not runs, by their mtime (re-checked once they change). */
@@ -542,6 +546,18 @@ class TraceMLController implements vscode.Disposable {
         case 'openSettings':
           await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:traceml.traceml');
           break;
+        case 'exportDashboard':
+          await this.exportDashboard(msg.runKeys, msg.chartKeys, msg.state);
+          break;
+        case 'copyDashboardPath':
+          if (this.lastDashboard) {
+            await vscode.env.clipboard.writeText(this.lastDashboard);
+            vscode.window.setStatusBarMessage('TraceML: dashboard path copied', 3000);
+          }
+          break;
+        case 'openDashboard':
+          if (this.lastDashboard) await this.openDashboard(this.lastDashboard);
+          break;
         case 'requestSeries':
           await this.onRequestSeries(msg.runKeys, msg.metrics);
           break;
@@ -594,6 +610,66 @@ class TraceMLController implements vscode.Disposable {
     } catch (e) {
       this.reportError('Export failed', e);
     }
+  }
+
+  /**
+   * Writes a self-contained HTML dashboard into `<cache>/dashboards/`: the runs in the table
+   * (summaries), plus metric histories (downsampled like on screen) and details for the plotted
+   * runs, the current view, and this version's webview bundle. Opens in any browser.
+   */
+  private async exportDashboard(runKeys: string[], chartKeys: string[], state: Record<string, unknown>): Promise<void> {
+    try {
+      const byKey = new Map(this.store.summaries().map((r) => [r.key, r]));
+      const runs = [...new Set([...runKeys, ...chartKeys])].flatMap((k) => (byKey.has(k) ? [byKey.get(k)!] : []));
+      if (!runs.length) {
+        this.reportError('Export dashboard failed', 'there are no runs to export (check the filters)');
+        return;
+      }
+      const charted = [...new Set(chartKeys)].filter((k) => byKey.has(k)).slice(0, MAX_DASHBOARD_CHART_RUNS);
+      const series: SeriesPayload[] = [];
+      const details: RunDetail[] = [];
+      for (const key of charted) {
+        await this.store.pollHistory(key);
+        for (const metric of byKey.get(key)!.metricNames) {
+          const s = this.store.getSeries(key, metric);
+          if (s) series.push(s);
+        }
+        const d = await this.store.loadDetail(key);
+        if (d) details.push(d);
+      }
+      const read = async (...parts: string[]) => new TextDecoder().decode(await vscode.workspace.fs.readFile(vscode.Uri.joinPath(this.ctx.extensionUri, ...parts)));
+      const exportedAt = new Date().toISOString();
+      const anon = anonymizeKeys({ runs, roots: this.rootLabels(), series, details, config: this.viewConfig() }, state);
+      const html = buildDashboardHtml({
+        ...anon.data,
+        state: anon.state,
+        js: await read('dist', 'webview.js'),
+        css: await read('dist', 'webview.css'),
+        logoSvg: await read('media', 'curly_m.svg'),
+        exportedAt,
+        nonce: nonce(),
+      });
+      const file = await this.cache().writeDashboard(`dashboard-${dashboardStamp(exportedAt)}.html`, html);
+      this.lastDashboard = file.fsPath;
+      const bytes = Buffer.byteLength(html, 'utf-8');
+      this.output.appendLine(`Exported dashboard (${runs.length} runs, ${charted.length} with charts, ${Math.round(bytes / 1024)} KB) to ${file.fsPath}`);
+      this.post({ type: 'dashboardExported', path: file.fsPath, runs: runs.length, chartRuns: charted.length, bytes });
+    } catch (e) {
+      this.reportError('Export dashboard failed', e);
+    }
+  }
+
+  /** Opens an exported dashboard in the default browser (on a remote machine: shows where it is). */
+  private async openDashboard(path: string): Promise<void> {
+    if (vscode.env.remoteName) {
+      const pick = await vscode.window.showInformationMessage(
+        `The dashboard was saved on the remote machine (${path}). Download it (right-click it in the Explorer > Download…) and open it in a browser.`,
+        'Copy path',
+      );
+      if (pick) await vscode.env.clipboard.writeText(path);
+      return;
+    }
+    await vscode.env.openExternal(vscode.Uri.file(path));
   }
 
   /** Saves a plot rendered by the webview (PNG, 300 DPI) into `<cache>/plots/`. */

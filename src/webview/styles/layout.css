@@ -393,3 +393,13 @@
   font-size: var(--tm-fs-xl);
   margin-bottom: 2px;
 }
+
+/* exported dashboard (read-only snapshot in a browser) */
+.snapshot-badge {
+  padding: 2px var(--tm-space-2);
+  border: 1px solid var(--tm-border);
+  border-radius: var(--tm-radius-md);
+  font-size: var(--tm-fs-xs);
+  color: var(--tm-text-secondary);
+  white-space: nowrap;
+}
