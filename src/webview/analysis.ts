@@ -126,6 +126,9 @@ const SECTIONS: { id: SectionId; title: string; icon: string; hint: string }[] =
 /** One run-level chart (one field): title, PNG / CSV / remove buttons, info line, SVG chart, legend. */
 class ChartPanel {
   readonly el: HTMLElement;
+  /** Controls in front of the title (the scatter plot's own Y picker). */
+  readonly lead = h('span', { class: 'chart-lead' });
+  leadKey = '';
   readonly title = h('span', { class: 'chart-title' });
   readonly info = h('div', { class: 'analysis-info' });
   readonly chartBox = h('div', { class: 'svg-chart' });
@@ -141,7 +144,7 @@ class ChartPanel {
     const png = button({ icon: 'download', title: 'Save this chart as PNG (300 DPI)', variant: 'ghost', cls: 'chart-remove', onClick: actions.onPng });
     const data = button({ icon: 'file', title: "Save this chart's data as CSV (for agents)", variant: 'ghost', cls: 'chart-remove', onClick: actions.onData });
     const remove = actions.onRemove ? button({ icon: 'close', title: 'Remove this chart', variant: 'ghost', cls: 'chart-remove', onClick: actions.onRemove }) : null;
-    this.el = h('article', { class: 'run-level-panel' }, h('header', { class: 'chart-head' }, this.title, h('span', { class: 'spacer' }), data, png, remove), this.info, this.chartBox, this.legend);
+    this.el = h('article', { class: 'run-level-panel' }, h('header', { class: 'chart-head' }, this.lead, this.title, h('span', { class: 'spacer' }), data, png, remove), this.info, this.chartBox, this.legend);
     this.resizeObserver = new ResizeObserver(() => {
       const w = this.chartBox.clientWidth;
       if (w && Math.abs(w - this.width) > 2) {
@@ -167,7 +170,7 @@ class RunLevelChart {
   readonly body: HTMLElement;
   readonly controls = h('div', { class: 'plot-options' });
   readonly list = h('div', { class: 'run-level-panels' });
-  /** By `main:<field>` / `extra:<field>` ('' = the empty-state panel). */
+  /** By `main:<field>` / `extra:<slot>:<field>` ('' = the empty-state panel). */
   readonly panels = new Map<string, ChartPanel>();
   controlsKey = '';
 
@@ -272,12 +275,57 @@ export class Analysis {
 
   // -- controls ------------------------------------------------------------------------
 
-  /** The fields charted in a section: the main one, then the added ones (still numeric, no repeats). */
-  private fieldsFor(kind: RunLevelKind, r: ReturnType<Analysis['resolved']>): string[] {
+  /**
+   * The charts of a section: the main field (`slot` -1), then the added ones (still numeric) with
+   * their index in `analysis.extra`. Box and bar skip repeats; each scatter plot has its own Y, so
+   * two plots may show the same one.
+   */
+  private fieldsFor(kind: RunLevelKind, r: ReturnType<Analysis['resolved']>): { field: string; slot: number }[] {
     const primary = kind === 'scatter' ? r.y : kind === 'box' ? r.boxField : r.barField;
     if (!primary) return [];
     const numeric = new Set(this.st.numericFields().map((f) => f.id));
-    return [...new Set([primary, ...(this.st.s.analysis.extra[kind] ?? []).filter((f) => numeric.has(f))])];
+    const out = [{ field: primary, slot: -1 }];
+    const seen = new Set([primary]);
+    (this.st.s.analysis.extra[kind] ?? []).forEach((field, slot) => {
+      if (!numeric.has(field) || (kind !== 'scatter' && seen.has(field))) return;
+      seen.add(field);
+      out.push({ field, slot });
+    });
+    return out;
+  }
+
+  /** Sets the Y field of one scatter plot (`slot` -1 = the first plot, which owns the Y range). */
+  private setScatterY(slot: number, field: string): void {
+    const a = this.st.s.analysis;
+    if (slot < 0) {
+      if (field !== a.y) Object.assign(a, { y: field, yLimits: AUTO_LIMITS });
+      this.st.changed('plots');
+      return;
+    }
+    const extra = [...(a.extra.scatter ?? [])];
+    extra[slot] = field;
+    this.setExtra('scatter', extra);
+  }
+
+  /**
+   * "New plot": adds a scatter plot against the same X, with one Y field: the first metric not
+   * charted yet (its picker in the plot header changes it).
+   */
+  private newPlotButton(r: ReturnType<Analysis['resolved']>): HTMLButtonElement {
+    return button({
+      label: 'New plot',
+      icon: 'plus',
+      title: 'Add another scatter plot against the same X. Each plot has one Y field: choose it in the plot header.',
+      onClick: () => {
+        const used = new Set([r.x, ...this.fieldsFor('scatter', r).map((c) => c.field)]);
+        const numeric = this.st.numericFields();
+        const free = numeric.filter((f) => !used.has(f.id));
+        const next = ['best', 'summary', 'last'].map((k) => free.find((f) => f.kind === k)).find(Boolean) ?? free[0] ?? numeric.find((f) => f.id !== r.x) ?? numeric[0];
+        if (!next) return;
+        this.setExtra('scatter', [...(this.st.s.analysis.extra.scatter ?? []), next.id]);
+        requestAnimationFrame(() => this.charts.scatter.list.lastElementChild?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+      },
+    });
   }
 
   private setExtra(kind: RunLevelKind, fields: string[]): void {
@@ -285,21 +333,20 @@ export class Analysis {
     this.st.changed('plots');
   }
 
-  /** "Add chart": a searchable list of numeric fields; picking one adds (or removes) its chart. */
-  private addChartButton(kind: RunLevelKind, r: ReturnType<Analysis['resolved']>): HTMLButtonElement {
-    const label = kind === 'scatter' ? 'Add Y' : 'Add chart';
-    const title = kind === 'scatter' ? 'Add a chart of another Y field against the same X' : 'Add a chart of another field (same grouping and options)';
+  /** "Add chart" (box / bar): a searchable list of numeric fields; picking one adds (or removes) its chart. */
+  private addChartButton(kind: 'box' | 'bar', r: ReturnType<Analysis['resolved']>): HTMLButtonElement {
+    const label = 'Add chart';
     const b: HTMLButtonElement = button({
       label,
       icon: 'plus',
-      title,
+      title: 'Add a chart of another field (same grouping and options)',
       onClick: () => {
-        const charted = new Set(this.fieldsFor(kind, r));
+        const charted = new Set(this.fieldsFor(kind, r).map((c) => c.field));
         let close = () => {};
         const pick = (v: string) => {
           close();
           const extra = this.st.s.analysis.extra[kind] ?? [];
-          const primary = this.fieldsFor(kind, r)[0];
+          const primary = this.fieldsFor(kind, r)[0]?.field;
           if (v === primary) return;
           this.setExtra(kind, extra.includes(v) ? extra.filter((f) => f !== v) : [...extra, v]);
         };
@@ -352,9 +399,8 @@ export class Analysis {
     if (c.kind === 'scatter') {
       c.controls.replaceChildren(
         pick('X', fieldItems(numeric), r.x ?? '', (v) => set(v === r.x ? {} : { x: v, xLimits: AUTO_LIMITS })),
-        button({ icon: 'refresh', title: 'Swap X and Y', variant: 'ghost', onClick: () => set({ x: r.y, y: r.x, xLimits: a.yLimits, yLimits: a.xLimits }) }),
-        pick('Y', fieldItems(numeric), r.y ?? '', (v) => set(v === r.y ? {} : { y: v, yLimits: AUTO_LIMITS })),
-        this.addChartButton('scatter', r),
+        button({ icon: 'refresh', title: "Swap X and the first plot's Y", variant: 'ghost', onClick: () => set({ x: r.y, y: r.x, xLimits: a.yLimits, yLimits: a.xLimits }) }),
+        this.newPlotButton(r),
         pick('Size', fieldItems(numeric, 'none'), r.size ?? '', (v) => set({ size: v || null })),
         pick('Color', groupOpts(), a.color ?? '', (v) => set({ color: v || null }), 'Colour points by a categorical field'),
         byGroupsToggle(a.scatterByGroups, !!r.color, (v) => set({ scatterByGroups: v }), 'One point per Color group at the mean of its runs (bars: ±1 standard deviation)', 'Choose a Color field (or group the table) to plot group means'),
@@ -394,7 +440,7 @@ export class Analysis {
     const axes = (['x', 'y'] as const).map((axis) => {
       const key = axis === 'x' ? ('xLimits' as const) : ('yLimits' as const);
       const label = axis.toUpperCase();
-      return { label, key, log: () => (axis === 'x' ? this.st.s.analysis.logX : this.st.s.analysis.logY), lo: input(label, 'min', a[key].min), hi: input(label, 'max', a[key].max) };
+      return { label, name: axis === 'x' ? 'X range' : 'Y range (first plot)', key, log: () => (axis === 'x' ? this.st.s.analysis.logX : this.st.s.analysis.logY), lo: input(label, 'min', a[key].min), hi: input(label, 'max', a[key].max) };
     });
     const apply = (commit: boolean) => {
       const msgs: string[] = [];
@@ -453,7 +499,7 @@ export class Analysis {
     return h(
       'div',
       { class: 'axis-limits', role: 'group', 'aria-label': 'Axis limits' },
-      ...axes.flatMap((ax) => [h('span', { class: 'field-label' }, `${ax.label} range`), ax.lo, h('span', { class: 'muted' }, '–'), ax.hi]),
+      ...axes.flatMap((ax) => [h('span', { class: 'field-label', title: ax.label === 'Y' ? "The first plot's Y axis; the other plots scale automatically" : '' }, ax.name), ax.lo, h('span', { class: 'muted' }, '–'), ax.hi]),
       reset,
       err,
     );
@@ -482,9 +528,9 @@ export class Analysis {
     this.renderControls(sec, r);
     const { runs, scope } = this.chartRuns();
     const fields = this.fieldsFor(kind, r);
-    // Panels are keyed by role and field, so a field that becomes the main one gets a fresh panel
+    // Panels are keyed by role, slot and field, so a chart whose field changes gets a fresh panel
     // (the main chart has no remove button and follows its picker).
-    const wanted = fields.length ? fields.map((f, i) => `${i === 0 ? 'main' : 'extra'}:${f}`) : [''];
+    const wanted = fields.length ? fields.map((c) => (c.slot < 0 ? `main:${c.field}` : `extra:${c.slot}:${c.field}`)) : [''];
     for (const [id, p] of sec.panels) {
       if (!wanted.includes(id)) {
         p.dispose();
@@ -492,31 +538,41 @@ export class Analysis {
       }
     }
     wanted.forEach((id, i) => {
-      const f = fields[i] ?? '';
+      const f = fields[i]?.field ?? '';
+      const slot = fields[i]?.slot ?? -1;
       let p = sec.panels.get(id);
       if (!p) {
         const panel: ChartPanel = new ChartPanel(() => this.renderChart(kind), {
           onPng: () => void this.exportChart(panel, kind),
           onData: () => this.exportData(kind, f),
-          onRemove: i === 0 || !f ? null : () => this.setExtra(kind, (this.st.s.analysis.extra[kind] ?? []).filter((x) => x !== f)),
+          onRemove: slot < 0 || !f ? null : () => this.setExtra(kind, (this.st.s.analysis.extra[kind] ?? []).filter((_, j) => j !== slot)),
         });
         p = panel;
         sec.panels.set(id, p);
       }
       if (sec.list.children[i] !== p.el) sec.list.insertBefore(p.el, sec.list.children[i] ?? null);
       if (!f) return this.showEmpty(p, 'No numeric run-level fields found (params or metrics.json).');
-      this.renderPanel(kind, p, f, i === 0, r, runs, scope);
+      this.renderPanel(kind, p, f, slot, r, runs, scope);
     });
   }
 
-  private renderPanel(kind: RunLevelKind, c: ChartPanel, field: string, primary: boolean, r: ReturnType<Analysis['resolved']>, runs: RunSummary[], scope: string): void {
+  private renderPanel(kind: RunLevelKind, c: ChartPanel, field: string, slot: number, r: ReturnType<Analysis['resolved']>, runs: RunSummary[], scope: string): void {
+    const primary = slot < 0;
     const width = Math.max(320, c.chartBox.clientWidth || 600);
     const common = [kind, field, primary, r, this.st.s.analysis, width, this.st.s.selected, this.st.s.focused];
     const label = this.st.fieldLabel(field);
 
     if (kind === 'scatter') {
       if (!r.x) return this.showEmpty(c, 'No numeric run-level fields found (params or metrics.json).');
-      c.title.textContent = `${label} vs ${this.st.fieldLabel(r.x)}`;
+      // Each scatter plot has exactly one Y field, chosen in its header.
+      const numeric = this.st.numericFields();
+      const leadKey = JSON.stringify([field, slot, numeric.map((f) => [f.id, f.label])]);
+      if (c.leadKey !== leadKey) {
+        c.leadKey = leadKey;
+        const y = searchSelect({ items: fieldItems(numeric), value: field, ariaLabel: 'Y', onChange: (v) => this.setScatterY(slot, v), placeholder: 'Search Y fields…' });
+        c.lead.replaceChildren(h('span', { class: 'field-label' }, 'Y'), y);
+      }
+      c.title.textContent = `vs ${this.st.fieldLabel(r.x)}`;
       const data = scatterData(runs, r.x, field, { sizeField: r.size, groupField: r.color });
       const byGroups = this.st.s.analysis.scatterByGroups && !!r.color;
       const key = JSON.stringify([...common, data, byGroups]);
