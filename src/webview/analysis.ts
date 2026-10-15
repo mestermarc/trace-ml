@@ -3,6 +3,7 @@
 // like the Line view. Each section is collapsible and remembers
 // its state. Run-level charts use only data already in the webview (params + metrics.json
 // summaries); they never request metrics.jsonl histories.
+import { applyWidth, chartMenuButton, chartSize, heightScale, moveItem, type ChartSize } from './chartLayout';
 import {
   AUTO_LIMITS,
   axisLimitsError,
@@ -34,6 +35,8 @@ import { button, emptyState, icon, openPopover, searchList, searchSelect, toggle
 const SVG_NS = 'http://www.w3.org/2000/svg';
 let clipSeq = 0;
 const CHART_H = 360;
+/** Scatter, box and bar charts start full width at normal height. */
+const RUN_LEVEL_SIZE: ChartSize = { w: 'full', h: 'normal' };
 const M = { l: 70, r: 18, t: 14, b: 46 };
 const BAR_ROW = 24;
 const BAR_LIMIT = 60;
@@ -136,15 +139,17 @@ class ChartPanel {
   readonly tooltip = h('div', { class: 'chart-tooltip', role: 'tooltip' });
   renderedKey = '';
   width = 0;
+  /** Height multiplier from the "⋯" menu (1 = normal). */
+  heightScale = 1;
   private readonly resizeObserver: ResizeObserver;
 
-  constructor(onResize: () => void, actions: { onPng: () => void; onData: () => void; onRemove: (() => void) | null }) {
+  constructor(onResize: () => void, actions: { onPng: () => void; onData: () => void; onRemove: (() => void) | null }, layoutMenu: HTMLButtonElement) {
     this.tooltip.hidden = true;
     this.chartBox.append(this.tooltip);
     const png = button({ icon: 'download', title: 'Save this chart as PNG (300 DPI)', variant: 'ghost', cls: 'chart-remove', onClick: actions.onPng });
     const data = button({ icon: 'file', title: "Save this chart's data as CSV (for agents)", variant: 'ghost', cls: 'chart-remove', onClick: actions.onData });
     const remove = actions.onRemove ? button({ icon: 'close', title: 'Remove this chart', variant: 'ghost', cls: 'chart-remove', onClick: actions.onRemove }) : null;
-    this.el = h('article', { class: 'run-level-panel' }, h('header', { class: 'chart-head' }, this.lead, this.title, h('span', { class: 'spacer' }), data, png, remove), this.info, this.chartBox, this.legend);
+    this.el = h('article', { class: 'run-level-panel' }, h('header', { class: 'chart-head' }, this.lead, this.title, h('span', { class: 'spacer' }), data, png, remove, layoutMenu), this.info, this.chartBox, this.legend);
     this.resizeObserver = new ResizeObserver(() => {
       const w = this.chartBox.clientWidth;
       if (w && Math.abs(w - this.width) > 2) {
@@ -154,6 +159,12 @@ class ChartPanel {
       }
     });
     this.resizeObserver.observe(this.chartBox);
+  }
+
+  /** Applies the size chosen in the "⋯" menu (grid span; the height is used when drawing). */
+  setSize(size: ChartSize): void {
+    applyWidth(this.el, size);
+    this.heightScale = heightScale(size.h);
   }
 
   dispose(): void {
@@ -305,6 +316,23 @@ export class Analysis {
     const extra = [...(a.extra.scatter ?? [])];
     extra[slot] = field;
     this.setExtra('scatter', extra);
+  }
+
+  /**
+   * Moves a chart of a section (the "⋯" menu): reorders its fields; the first one becomes the
+   * section's main field (for the scatter, the plot that owns the Y range, which then resets).
+   */
+  private moveChart(kind: RunLevelKind, from: number, to: number): void {
+    const r = this.resolved();
+    const list = moveItem(this.fieldsFor(kind, r).map((c) => c.field), from, to);
+    const a = this.st.s.analysis;
+    if (!list.length) return;
+    if (kind === 'scatter') {
+      if (list[0] !== r.y) a.yLimits = AUTO_LIMITS;
+      a.y = list[0]!;
+    } else if (kind === 'box') a.boxField = list[0]!;
+    else a.bar = { ...a.bar, field: list[0]! };
+    this.setExtra(kind, list.slice(1));
   }
 
   /**
@@ -542,15 +570,27 @@ export class Analysis {
       const slot = fields[i]?.slot ?? -1;
       let p = sec.panels.get(id);
       if (!p) {
-        const panel: ChartPanel = new ChartPanel(() => this.renderChart(kind), {
-          onPng: () => void this.exportChart(panel, kind),
-          onData: () => this.exportData(kind, f),
-          onRemove: slot < 0 || !f ? null : () => this.setExtra(kind, (this.st.s.analysis.extra[kind] ?? []).filter((_, j) => j !== slot)),
-        });
+        const panel: ChartPanel = new ChartPanel(
+          () => this.renderChart(kind),
+          {
+            onPng: () => void this.exportChart(panel, kind),
+            onData: () => this.exportData(kind, f),
+            onRemove: slot < 0 || !f ? null : () => this.setExtra(kind, (this.st.s.analysis.extra[kind] ?? []).filter((_, j) => j !== slot)),
+          },
+          chartMenuButton({
+            st: this.st,
+            id: `${kind}:${f}`,
+            name: f ? `this ${kind} chart` : kind,
+            defaults: RUN_LEVEL_SIZE,
+            position: () => ({ index: [...sec.list.children].indexOf(panel.el), count: sec.list.children.length }),
+            onMove: (to) => this.moveChart(kind, [...sec.list.children].indexOf(panel.el), to),
+          }),
+        );
         p = panel;
         sec.panels.set(id, p);
       }
       if (sec.list.children[i] !== p.el) sec.list.insertBefore(p.el, sec.list.children[i] ?? null);
+      p.setSize(chartSize(this.st, `${kind}:${f}`, RUN_LEVEL_SIZE));
       if (!f) return this.showEmpty(p, 'No numeric run-level fields found (params or metrics.json).');
       this.renderPanel(kind, p, f, slot, r, runs, scope);
     });
@@ -559,7 +599,7 @@ export class Analysis {
   private renderPanel(kind: RunLevelKind, c: ChartPanel, field: string, slot: number, r: ReturnType<Analysis['resolved']>, runs: RunSummary[], scope: string): void {
     const primary = slot < 0;
     const width = Math.max(320, c.chartBox.clientWidth || 600);
-    const common = [kind, field, primary, r, this.st.s.analysis, width, this.st.s.selected, this.st.s.focused];
+    const common = [kind, field, primary, r, this.st.s.analysis, width, c.heightScale, this.st.s.selected, this.st.s.focused];
     const label = this.st.fieldLabel(field);
 
     if (kind === 'scatter') {
@@ -708,6 +748,7 @@ export class Analysis {
 
   /** `byGroups`: the points are group means (GroupPoint), drawn larger with ±1 std whiskers. */
   private drawScatter(c: ChartPanel, data: ScatterData, xf: string, yf: string, sizeF: string | null, colorF: string | null, w: number, total: number, scope: string, primary: boolean, byGroups = false): void {
+    const H = Math.round(CHART_H * c.heightScale);
     const { logX, logY } = this.st.s.analysis;
     const colors = palette();
     const colorOf = colorF ? this.st.groupColorIndex(colorF) : new Map<string, number>();
@@ -717,7 +758,7 @@ export class Analysis {
     const spanY = byGroups ? data.points.flatMap((p) => [p.y - gp(p).sy, p.y + gp(p).sy]) : data.points.map((p) => p.y);
     const lim = this.effectiveLimits(primary);
     const xs = makeScale(spanX, M.l, w - M.r, logX, false, lim.x);
-    const ys = makeScale(spanY, CHART_H - M.b, M.t, logY, false, lim.y);
+    const ys = makeScale(spanY, H - M.b, M.t, logY, false, lim.y);
     const plottable = data.points.filter((p) => xs.valid(p.x) && ys.valid(p.y));
     const logDropped = data.points.length - plottable.length;
     // Manual limits hide the points outside the range (the data itself is unchanged).
@@ -729,8 +770,8 @@ export class Analysis {
     const sMax = Math.max(...sizes);
     const radius = (v: number | null) => (v === null || !sizes.length ? (byGroups ? 7 : 4.5) : sMax === sMin ? 7 : 3 + 9 * Math.sqrt((v - sMin) / (sMax - sMin)));
 
-    const svg = s('svg', { width: w, height: CHART_H, class: 'scatter', role: 'img', 'aria-label': `Scatter of ${this.st.fieldLabel(yf)} vs ${this.st.fieldLabel(xf)}` });
-    this.axes(svg, xs, ys, formatterFor(xf), formatterFor(yf), w, CHART_H, M, this.st.fieldLabel(xf), this.st.fieldLabel(yf));
+    const svg = s('svg', { width: w, height: H, class: 'scatter', role: 'img', 'aria-label': `Scatter of ${this.st.fieldLabel(yf)} vs ${this.st.fieldLabel(xf)}` });
+    this.axes(svg, xs, ys, formatterFor(xf), formatterFor(yf), w, H, M, this.st.fieldLabel(xf), this.st.fieldLabel(yf));
     const sel = new Set(this.st.s.selected);
     const fg = cssVar('--tm-text', '#e4e7ec');
     const rows = new Map<string, string[]>();
@@ -740,7 +781,7 @@ export class Analysis {
     let marks: SVGElement = svg;
     if (limited) {
       const id = `scatter-clip-${++clipSeq}`;
-      svg.append(s('defs', {}, s('clipPath', { id }, s('rect', { x: M.l, y: M.t, width: Math.max(0, w - M.l - M.r), height: CHART_H - M.t - M.b }))));
+      svg.append(s('defs', {}, s('clipPath', { id }, s('rect', { x: M.l, y: M.t, width: Math.max(0, w - M.l - M.r), height: H - M.t - M.b }))));
       marks = s('g', { 'clip-path': `url(#${id})` });
       svg.append(marks);
     }
@@ -800,22 +841,23 @@ export class Analysis {
   }
 
   private drawBox(c: ChartPanel, data: BoxData, field: string, groupF: string | null, minW: number, total: number, scope: string): void {
+    const H = Math.round(CHART_H * c.heightScale);
     const logY = this.st.s.analysis.boxLogY;
     const colors = palette();
     const colorOf = groupF ? this.st.groupColorIndex(groupF) : new Map<string, number>();
     const bandW = Math.max(56, Math.min(160, (minW - M.l - M.r) / Math.max(1, data.boxes.length)));
     const w = Math.max(minW, M.l + M.r + bandW * data.boxes.length);
     const all = data.boxes.flatMap((b) => b.values.map((v) => v.value));
-    const ys = makeScale(all, CHART_H - M.b, M.t, logY);
+    const ys = makeScale(all, H - M.b, M.t, logY);
     const fmt = formatterFor(field);
-    const svg = s('svg', { width: w, height: CHART_H, class: 'boxplot', role: 'img', 'aria-label': `Box plot of ${this.st.fieldLabel(field)}` });
-    this.axes(svg, null, ys, fmt, fmt, w, CHART_H, M, groupF ? this.st.fieldLabel(groupF) : '', this.st.fieldLabel(field));
+    const svg = s('svg', { width: w, height: H, class: 'boxplot', role: 'img', 'aria-label': `Box plot of ${this.st.fieldLabel(field)}` });
+    this.axes(svg, null, ys, fmt, fmt, w, H, M, groupF ? this.st.fieldLabel(groupF) : '', this.st.fieldLabel(field));
     const fg = cssVar('--tm-text', '#e4e7ec');
     const muted = cssVar('--tm-text-muted', '#747c8a');
     const sel = new Set(this.st.s.selected);
     const rows = new Map<string, string[]>();
     let logDropped = 0;
-    const clampY = (v: number) => (ys.valid(v) ? ys.map(v) : CHART_H - M.b);
+    const clampY = (v: number) => (ys.valid(v) ? ys.map(v) : H - M.b);
 
     data.boxes.forEach((b, i) => {
       const cx = M.l + bandW * (i + 0.5);
@@ -842,8 +884,8 @@ export class Analysis {
       }
       const label = b.label.length > 18 ? b.label.slice(0, 17) + '…' : b.label;
       g.append(
-        s('text', { x: cx, y: CHART_H - M.b + 16, 'text-anchor': 'middle', 'font-size': 11, fill: fg }, s('title', {}, b.label), label),
-        s('text', { x: cx, y: CHART_H - M.b + 29, 'text-anchor': 'middle', 'font-size': 10, fill: muted }, `n=${b.n}`),
+        s('text', { x: cx, y: H - M.b + 16, 'text-anchor': 'middle', 'font-size': 11, fill: fg }, s('title', {}, b.label), label),
+        s('text', { x: cx, y: H - M.b + 29, 'text-anchor': 'middle', 'font-size': 10, fill: muted }, `n=${b.n}`),
       );
       // Individual runs (jittered) so the underlying runs can be inspected and clicked.
       const outliers = new Set(b.outliers.map((o) => o.key));
@@ -878,13 +920,14 @@ export class Analysis {
 
   /** Horizontal bars (names stay readable): one per run, or one per group with a min–max range. */
   private drawBar(c: ChartPanel, data: BarData, field: string, groupF: string | null, mode: 'runs' | 'groups', groupsNeedGroup: boolean, w: number, total: number, scope: string): void {
+    const ROW = Math.max(16, Math.round(BAR_ROW * c.heightScale));
     if (!data.bars.length) return this.showEmpty(c, `No ${scope} run has a numeric value for ${this.st.fieldLabel(field)}.`);
     const colors = palette();
     const colorOf = groupF ? this.st.groupColorIndex(groupF) : new Map<string, number>();
     const fmt = formatterFor(field);
     const labelW = Math.min(240, Math.max(90, Math.max(...data.bars.map((b) => b.label.length)) * 7 + 16));
     const m = { l: labelW, r: 64, t: 8, b: 40 };
-    const height = m.t + m.b + data.bars.length * BAR_ROW;
+    const height = m.t + m.b + data.bars.length * ROW;
     const values = data.bars.flatMap((b) => (b.min !== undefined ? [b.value, b.min, b.max!] : [b.value]));
     const zero = this.st.s.analysis.bar.zero;
     const xs = makeScale(values, m.l, w - m.r, false, zero);
@@ -897,7 +940,7 @@ export class Analysis {
     const rows = new Map<string, string[]>();
 
     data.bars.forEach((b, i) => {
-      const y = m.t + i * BAR_ROW;
+      const y = m.t + i * ROW;
       const color =
         mode === 'groups'
           ? colors[colorOf.get(b.label) ?? 0]!
@@ -910,12 +953,12 @@ export class Analysis {
       const focused = mode === 'runs' && b.key === this.st.s.focused;
       const label = b.label.length > labelW / 7 ? b.label.slice(0, Math.floor(labelW / 7) - 1) + '…' : b.label;
       svg.append(
-        s('text', { x: m.l - 8, y: y + BAR_ROW / 2 + 4, 'text-anchor': 'end', 'font-size': 11, fill: focused ? fg : secondary, 'font-weight': focused ? 700 : 400 }, s('title', {}, b.label), label),
+        s('text', { x: m.l - 8, y: y + ROW / 2 + 4, 'text-anchor': 'end', 'font-size': 11, fill: focused ? fg : secondary, 'font-weight': focused ? 700 : 400 }, s('title', {}, b.label), label),
         s('rect', {
           x: Math.min(base, x),
           y: y + 4,
           width: Math.max(1, Math.abs(x - base)),
-          height: BAR_ROW - 8,
+          height: ROW - 8,
           rx: 2,
           fill: withAlpha(color, focused ? 0.95 : 0.7),
           stroke: focused || sel.has(b.key) ? fg : 'none',
@@ -923,10 +966,10 @@ export class Analysis {
           'data-key': b.key,
           class: mode === 'runs' ? 'pt' : '',
         }),
-        s('text', { x: Math.max(x, base) + 6, y: y + BAR_ROW / 2 + 4, 'font-size': 11, fill: secondary }, fmt(b.value)),
+        s('text', { x: Math.max(x, base) + 6, y: y + ROW / 2 + 4, 'font-size': 11, fill: secondary }, fmt(b.value)),
       );
       if (b.min !== undefined && b.max !== undefined && b.n! > 1) {
-        const cy = y + BAR_ROW / 2;
+        const cy = y + ROW / 2;
         svg.append(
           s('line', { x1: xs.map(b.min), x2: xs.map(b.max), y1: cy, y2: cy, stroke: fg, 'stroke-width': 1.2, opacity: 0.7 }),
           s('line', { x1: xs.map(b.min), x2: xs.map(b.min), y1: cy - 4, y2: cy + 4, stroke: fg, 'stroke-width': 1.2, opacity: 0.7 }),

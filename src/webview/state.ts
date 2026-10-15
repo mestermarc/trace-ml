@@ -1,4 +1,5 @@
 // Webview state: data received from the host plus persisted UI state (sort, filters, selection...).
+import type { ChartSize } from './chartLayout';
 import { defaultVisibleColumns, differingParams, filterRuns, isDateColumn, limitRows, moveColumn, pruneSelection, type FilterState } from '../model/filters';
 export { MAX_ROWS_LIMIT, parseMaxRows } from '../model/filters';
 import { combinedGroupField, groupFieldParts, groupRuns, type AxisLimits, type RunGroup } from '../model/analysis';
@@ -102,6 +103,8 @@ export interface PersistedState {
   };
   colors: Record<string, number>;
   tableHeight: number;
+  /** Chart sizes chosen in a chart's "⋯" menu, by chart id (`line:<metric>`, `scatter:<field>`...). */
+  chartSizes: Record<string, ChartSize>;
 }
 
 export const MAX_PLOT_RUNS = 30;
@@ -146,6 +149,7 @@ const DEFAULT_STATE: PersistedState = {
   },
   colors: {},
   tableHeight: 320,
+  chartSizes: {},
 };
 
 interface VsCodeApi {
