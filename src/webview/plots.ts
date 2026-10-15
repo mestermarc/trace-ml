@@ -7,12 +7,14 @@ import { groupMeanSeries, plotGroups, spreadSeries } from '../model/groupAgg';
 import { AUTO_ALL_MAX, DEFAULT_TOP_N, effectiveLineMode, parseTopN, resolveDirection, topLineKeys, type LineMode, type RankDir } from '../model/lineDisplay';
 import { emaSmooth, seriesXY, type XMode } from '../model/metricSeries';
 import type { RunSummary, SeriesPayload } from '../types';
-import { cssVar, formatClock, formatNumber, h, palette, withAlpha } from './dom';
+import { cssVar, formatClock, formatNumber, h, palette, tooltipPosition, withAlpha } from './dom';
 import { EXPORT_SCALE, composePng } from './pngExport';
 import { MAX_PLOT_RUNS, seriesId, type AppState, type Area } from './state';
 import { button, chip, emptyState, openPopover, toggle } from './ui';
 
 const CHART_H = 230;
+/** Most runs listed in a line chart's tooltip (the hovered one and the closest to the cursor). */
+const TOOLTIP_ROWS = 5;
 /** Line charts start a third of a row wide (half or full on narrower panels) at normal height. */
 const LINE_SIZE: ChartSize = { w: 'small', h: 'normal' };
 const X_LABEL: Record<XMode, string> = { step: 'Step', epoch: 'Epoch', wall: 'Wall time' };
@@ -362,15 +364,28 @@ class ChartCard {
     const rows: Node[] = [h('div', { class: 'tt-x' }, `${X_LABEL[xMode]} ${x === undefined || x === null ? '' : xMode === 'wall' ? formatClock(x) : formatNumber(x)}`)];
     const hotLine = this.focusedSeries > 0 ? (this.cols[this.focusedSeries - 1]?.line ?? -1) : -1;
     const at = (col: number) => (col < 0 ? undefined : u.data[col + 1]?.[idx]);
+    const col = (i: number, kind: ColMeta['kind']) => this.cols.findIndex((c) => c.line === i && c.kind === kind);
+    // A compact tooltip: the hovered line, the median, then the lines closest to the cursor, at
+    // most TOOLTIP_ROWS (fewer on short charts: about half the plot height), listed by value; the
+    // rest are counted.
+    const cursorY = u.cursor.top !== undefined && u.cursor.top >= 0 ? u.posToVal(u.cursor.top, 'y') : null;
+    const candidates: { i: number; v: number | null }[] = [];
     this.lines.forEach((l, i) => {
       // Faint run lines (Median + IQR) are listed only while hovered; the median row stands for them.
       if (l.role === 'faint' && i !== hotLine) return;
-      const col = (kind: ColMeta['kind']) => this.cols.findIndex((c) => c.line === i && c.kind === kind);
-      const v = at(col('main'));
-      if (v === undefined) return;
-      const raw = at(col('raw'));
-      const lo = at(col('lo'));
-      const hi = at(col('hi'));
+      const v = at(col(i, 'main'));
+      if (v !== undefined) candidates.push({ i, v });
+    });
+    const rank = (c: { i: number; v: number | null }) =>
+      c.i === hotLine ? -2 : this.lines[c.i]!.role === 'median' ? -1 : c.v === null ? Number.POSITIVE_INFINITY : cursorY === null ? 0 : Math.abs(c.v - cursorY);
+    const shown = [...candidates].sort((a, b) => rank(a) - rank(b)).slice(0, Math.max(2, Math.min(TOOLTIP_ROWS, Math.floor((u.over.clientHeight / 2 - 28) / 16))));
+    shown.sort((a, b) => (b.v ?? Number.NEGATIVE_INFINITY) - (a.v ?? Number.NEGATIVE_INFINITY));
+    const more = candidates.length - shown.length;
+    for (const { i, v } of shown) {
+      const l = this.lines[i]!;
+      const raw = at(col(i, 'raw'));
+      const lo = at(col(i, 'lo'));
+      const hi = at(col(i, 'hi'));
       rows.push(
         h(
           'div',
@@ -383,19 +398,17 @@ class ChartCard {
           raw !== undefined && raw !== null ? h('span', { class: 'tt-raw' }, formatNumber(raw)) : null,
         ),
       );
-    });
+    }
     if (rows.length === 1) {
       tip.hidden = true;
       return;
     }
+    if (more > 0) rows.push(h('div', { class: 'tt-more' }, `+${more} more · hover a line to see it`));
     tip.replaceChildren(...rows);
     tip.hidden = false;
-    const left = u.cursor.left ?? 0;
-    const top = u.cursor.top ?? 0;
-    const w = tip.offsetWidth;
-    const overW = u.over.clientWidth;
-    tip.style.left = `${left + 16 + w > overW ? Math.max(0, left - w - 16) : left + 16}px`;
-    tip.style.top = `${Math.max(0, Math.min(top + 12, u.over.clientHeight - tip.offsetHeight))}px`;
+    const pos = tooltipPosition({ x: u.cursor.left ?? 0, y: u.cursor.top ?? 0, w: tip.offsetWidth, h: tip.offsetHeight, boxW: u.over.clientWidth, boxH: u.over.clientHeight });
+    tip.style.left = `${pos.left}px`;
+    tip.style.top = `${pos.top}px`;
   }
 
   /**
