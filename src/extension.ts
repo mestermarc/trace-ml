@@ -566,6 +566,9 @@ class TraceMLController implements vscode.Disposable {
           if (detail) this.post({ type: 'runDetail', detail });
           break;
         }
+        case 'copyRunPath':
+          await this.copyRunPath(msg.runKey);
+          break;
         case 'openFile':
           await this.openFile(msg.runKey, msg.file);
           break;

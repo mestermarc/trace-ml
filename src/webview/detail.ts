@@ -106,6 +106,13 @@ export function renderInspector(st: AppState, run: RunSummary, detail: RunDetail
       { class: 'insp-actions' },
       selectBtn,
       button({
+        label: 'Copy folder',
+        icon: 'copy',
+        variant: 'secondary',
+        title: `Copy the run folder path to the clipboard\n${run.location}`,
+        onClick: () => st.post({ type: 'copyRunPath', runKey: run.key }),
+      }),
+      button({
         label: 'Delete',
         icon: 'trash',
         variant: 'ghost',

@@ -35,6 +35,7 @@ const ICONS: Record<string, string> = {
   activity: 'M22 12h-4l-3 9L9 3l-3 9H2',
   trash: 'M3 6h18 M8 6V4h8v2 M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14 M10 11v6 M14 11v6',
   download: 'M12 3v12 M7 10l5 5 5-5 M4 19h16',
+  copy: 'M9 9h11v11H9z M5 15H4V4h11v1',
   grip: 'M9 6h.01 M15 6h.01 M9 12h.01 M15 12h.01 M9 18h.01 M15 18h.01',
 };
 

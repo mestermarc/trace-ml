@@ -203,6 +203,7 @@ const HOST_STUB = `
             case 'exportTable': unavailable('Table CSV export'); break;
             case 'exportDashboard': unavailable('Exporting a dashboard'); break;
             case 'openFile': unavailable('Opening run files'); break;
+            case 'copyRunPath': unavailable('Copying the run folder path'); break;
             case 'openSettings': unavailable('Settings'); break;
           }
         }, 0);
