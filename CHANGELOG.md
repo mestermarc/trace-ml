@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.8
+
+- **Unselect all.** Next to *Select filtered* in the table toolbar, *Unselect all* clears the whole selection (also runs hidden by the current filters). It is disabled while nothing is selected.
+
 ## 0.2.7
 
 - **Copy run folder.** The run inspector has a *Copy folder* button that copies the run's folder path to the clipboard (hover it to see the path).
