@@ -1428,6 +1428,7 @@ input[type='checkbox'].switch-input::after {
 }
 
 .chart-card:hover .chart-remove,
+.run-level-panel:hover .chart-remove,
 .chart-remove:focus-visible {
   opacity: 1;
 }
@@ -1554,6 +1555,19 @@ input[type='checkbox'].switch-input::after {
 
 .run-level-panel > .chart-head {
   padding-left: 0;
+  height: auto;
+  min-height: 24px;
+}
+
+/* the scatter plot's own Y picker, in front of "vs <X>" */
+.chart-lead {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chart-lead:empty {
+  display: none;
 }
 
 .analysis-info {
