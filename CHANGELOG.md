@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.7
 
 - **Copy run folder.** The run inspector has a *Copy folder* button that copies the run's folder path to the clipboard (hover it to see the path).
 - **Scatter: New plot, one Y per plot.** *Add Y* is replaced by *New plot*, which always adds a plot (with the first metric not charted yet). Each scatter plot has its own single *Y* picker in its header instead of the shared Y picker and the multi-select list (where picking a charted field silently removed its plot and picking the first plot's Y did nothing). The PNG / CSV / remove buttons of Scatter, Box and Bar charts now appear on hover; they were invisible.
