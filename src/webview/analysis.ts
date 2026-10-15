@@ -24,7 +24,7 @@ import {
 import { scatterGroupMeans, stats, type GroupPoint } from '../model/groupAgg';
 import { barCsv, boxCsv, scatterCsv, scatterGroupCsv } from '../model/plotData';
 import { parseColumnId } from '../model/run';
-import { cssVar, formatDuration, formatNumber, formatTime, h, palette, withAlpha } from './dom';
+import { cssVar, formatDuration, formatNumber, formatTime, h, palette, tooltipPosition, withAlpha } from './dom';
 import { fieldItems } from './filters';
 import { composePng, legendFromDom, rasterizeSvg } from './pngExport';
 import type { Plots } from './plots';
@@ -721,12 +721,11 @@ export class Analysis {
       if (!key || !lines) return hide();
       c.tooltip.replaceChildren(...lines.map((l, i) => h('div', { class: i === 0 ? 'tt-x' : 'tt-row' }, l)));
       c.tooltip.hidden = false;
+      // beside the hovered mark, away from it and the data next to it (see tooltipPosition)
       const box = c.chartBox.getBoundingClientRect();
-      const x = e.clientX - box.left + c.chartBox.scrollLeft;
-      const y = e.clientY - box.top + c.chartBox.scrollTop;
-      const w = c.tooltip.offsetWidth;
-      c.tooltip.style.left = `${x + 14 + w > box.width + c.chartBox.scrollLeft ? x - w - 14 : x + 14}px`;
-      c.tooltip.style.top = `${Math.max(0, y - 10)}px`;
+      const pos = tooltipPosition({ x: e.clientX - box.left, y: e.clientY - box.top, w: c.tooltip.offsetWidth, h: c.tooltip.offsetHeight, boxW: c.chartBox.clientWidth, boxH: c.chartBox.clientHeight });
+      c.tooltip.style.left = `${pos.left + c.chartBox.scrollLeft}px`;
+      c.tooltip.style.top = `${pos.top + c.chartBox.scrollTop}px`;
     });
     svg.addEventListener('click', (e) => {
       const key = (e.target as Element).getAttribute?.('data-key');

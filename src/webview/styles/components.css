@@ -1505,14 +1505,15 @@ input[type='checkbox'].switch-input::after {
   padding: var(--tm-space-2);
 }
 
+/* compact and slightly see-through, so the chart stays readable while hovering */
 .chart-tooltip {
   position: absolute;
   z-index: 10;
   pointer-events: none;
-  min-width: 160px;
-  padding: 6px 8px;
+  max-width: 260px;
+  padding: 4px 7px;
   border-radius: var(--tm-radius-md);
-  background: var(--tm-surface-raised);
+  background: color-mix(in srgb, var(--tm-surface-raised) 90%, transparent);
   border: 1px solid var(--tm-border);
   box-shadow: var(--tm-shadow);
   font-size: var(--tm-fs-xs);
@@ -1522,16 +1523,27 @@ input[type='checkbox'].switch-input::after {
 
 .tt-x {
   color: var(--tm-text-muted);
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   font-variant-numeric: tabular-nums;
 }
 
 .tt-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  line-height: 18px;
+  gap: 5px;
+  line-height: 16px;
   color: var(--tm-text-secondary);
+}
+
+.tt-row .swatch {
+  width: 8px;
+  height: 8px;
+}
+
+.tt-more {
+  margin-top: 2px;
+  color: var(--tm-text-muted);
+  font-size: 10px;
 }
 
 .tt-row.hot {
@@ -1542,12 +1554,12 @@ input[type='checkbox'].switch-input::after {
 .tt-name {
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 220px;
+  max-width: 150px;
 }
 
 .tt-val {
   margin-left: auto;
-  padding-left: 14px;
+  padding-left: 10px;
   font-variant-numeric: tabular-nums;
   color: var(--tm-text);
 }

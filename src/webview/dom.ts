@@ -126,3 +126,19 @@ export function withAlpha(color: string, a: number): string {
 export function cssVar(name: string, fallback: string): string {
   return getComputedStyle(document.body).getPropertyValue(name).trim() || fallback;
 }
+
+/**
+ * Where to put a chart tooltip of size `w`×`h` for a cursor at (`x`, `y`) in a `boxW`×`boxH`
+ * area: beside the cursor on the side with more room, above it in the lower half and below it in
+ * the upper half, so the hovered point and the data around it stay visible. Kept inside the area
+ * (a tall tooltip then overlaps the cursor's height, but stays beside it).
+ */
+export function tooltipPosition(p: { x: number; y: number; w: number; h: number; boxW: number; boxH: number; gap?: number }): { left: number; top: number } {
+  const gap = p.gap ?? 12;
+  const right = p.x + gap;
+  const left = p.x - gap - p.w;
+  const x = p.x <= p.boxW / 2 ? (right + p.w <= p.boxW ? right : left) : left >= 0 ? left : right;
+  const y = p.y >= p.boxH / 2 ? p.y - gap - p.h : p.y + gap;
+  const clamp = (v: number, max: number) => Math.max(0, Math.min(v, Math.max(0, max)));
+  return { left: clamp(x, p.boxW - p.w), top: clamp(y, p.boxH - p.h) };
+}
