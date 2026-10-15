@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Copy run folder.** The run inspector has a *Copy folder* button that copies the run's folder path to the clipboard (hover it to see the path).
+
 ## 0.2.6
 
 - **Export dashboard.** A new button in the header saves the dashboard as one self-contained HTML file in `traceml/.cache/dashboards/`, so you can share results with people who don't use VS Code. It contains the filtered runs, the metric histories and details of the selected runs, and the current view. It opens in any browser, makes no network requests, and replaces absolute folder paths with neutral names. Recipients can sort, filter, group, change the charts and download PNGs / CSVs; it is a snapshot, not live.

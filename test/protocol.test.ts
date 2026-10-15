@@ -21,4 +21,10 @@ describe('webview message validation', () => {
     expect(parseWebviewMessage({ type: 'openFile', runKey: 'k', file: '../../etc/passwd' })).toBeNull();
     expect(parseWebviewMessage({ type: 'openFile', runKey: 'k', file: 'logs/run.log' })).toEqual({ type: 'openFile', runKey: 'k', file: 'logs/run.log' });
   });
+
+  it('accepts copyRunPath only with a run key', () => {
+    expect(parseWebviewMessage({ type: 'copyRunPath', runKey: 'k' })).toEqual({ type: 'copyRunPath', runKey: 'k' });
+    expect(parseWebviewMessage({ type: 'copyRunPath' })).toBeNull();
+    expect(parseWebviewMessage({ type: 'copyRunPath', runKey: 3 })).toBeNull();
+  });
 });

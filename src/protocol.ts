@@ -29,6 +29,8 @@ export type WebviewToHost =
   /** Declares the full set of series the webview currently plots (replaces the previous request). */
   | { type: 'requestSeries'; runKeys: string[]; metrics: string[] }
   | { type: 'requestDetail'; runKey: string }
+  /** Copy a run's folder path to the clipboard. */
+  | { type: 'copyRunPath'; runKey: string }
   | { type: 'openFile'; runKey: string; file: RunFileName }
   | { type: 'refreshNow' }
   /** Opens the VS Code settings UI filtered to TraceML settings. */
@@ -166,7 +168,8 @@ export function parseWebviewMessage(msg: unknown): WebviewToHost | null {
       }
       return null;
     case 'requestDetail':
-      return typeof m.runKey === 'string' ? { type: 'requestDetail', runKey: m.runKey } : null;
+    case 'copyRunPath':
+      return typeof m.runKey === 'string' ? { type: m.type, runKey: m.runKey } : null;
     case 'openFile':
       if (typeof m.runKey === 'string' && (RUN_FILES as readonly unknown[]).includes(m.file)) {
         return { type: 'openFile', runKey: m.runKey, file: m.file as RunFileName };
