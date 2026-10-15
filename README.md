@@ -4,6 +4,8 @@
 
 TraceML is a VS Code extension for browsing ML training runs. It finds runs on the filesystem and shows them in a panel inside VS Code: a run table with filtering and sorting, metric plots, a detail view for each run, and side-by-side comparison.
 
+![TraceML dashboard: the run table with six selected runs and their train/loss, val/loss and val/auc line charts](media/screenshot.png)
+
 The filesystem is the only source of truth. There is no server, no database, no HTTP endpoint and no browser app. Everything runs inside VS Code, including over **Remote-SSH**, where the extension reads the runs directly on the remote machine.
 
 **TraceML is read-only for your runs.** It never creates, modifies or deletes anything in your run folders (even *Delete* only hides a run in TraceML), it makes no network calls, and it reads only inside the runs folders you configure. Its own small files (remembered view, run database, CSV exports, saved plots, exported dashboards) go to `traceml/.cache`. See [Security and resource use](#security-and-resource-use).
