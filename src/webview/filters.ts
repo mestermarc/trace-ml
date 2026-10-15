@@ -93,6 +93,7 @@ export class Toolbar {
   private readonly segment = h('div', { class: 'segmented status-segment', role: 'group', 'aria-label': 'Filter by status' });
   private readonly differingHost = h('span', {});
   private readonly counts = h('span', { class: 'toolbar-counts' });
+  private readonly unselectBtn: HTMLButtonElement;
   private readonly chips = h('div', { class: 'filter-chips', 'aria-label': 'Active filters' });
   private readonly maxRows: HTMLInputElement;
   private readonly firstHost = h('span', {});
@@ -177,6 +178,7 @@ export class Toolbar {
       h('div', { class: 'spacer' }),
       h('div', { class: 'btn-group' }, this.filterBtn, this.groupBtn, this.columnsBtn, this.exportBtn, moreBtn),
     );
+    this.unselectBtn = button({ label: 'Unselect all', icon: 'close', variant: 'ghost', cls: 'btn-small', title: 'Clear the selection (all selected runs, including ones hidden by the filters)', onClick: () => st.setSelected([]) });
     const secondary = h(
       'div',
       { class: 'toolbar-row' },
@@ -189,6 +191,7 @@ export class Toolbar {
         this.counts,
         h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Max rows'), this.maxRows, maxRowsList),
         button({ label: 'Select filtered', icon: 'check', variant: 'ghost', cls: 'btn-small', title: 'Add all runs matching the filters to the selection', onClick: () => st.setSelected([...selectFiltered(new Set(st.s.selected), st.sortedRuns())]) }),
+        this.unselectBtn,
       ),
     );
     this.el = h('div', { class: 'toolbar' }, primary, secondary, this.chips);
@@ -238,6 +241,7 @@ export class Toolbar {
     );
     this.counts.title = displayed < filtered ? `The table shows the first ${displayed} rows (Max rows). Increase Max rows to see more.` : '';
     this.exportBtn.disabled = displayed === 0;
+    this.unselectBtn.disabled = this.st.s.selected.length === 0;
     const colConds = Object.entries(this.st.s.filters.columns).filter(([k, v]) => v.trim() && k !== 'location').length;
     this.setBadge(this.filterBtn, colConds);
     const groupBy = this.st.s.groupBy;
