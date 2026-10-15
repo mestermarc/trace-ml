@@ -1,5 +1,6 @@
 // Line view: metric toolbar (picker, selected-metric chips, x axis, log-y, smoothing) and one uPlot
 // chart per metric with one line per selected run. Zoom is kept across live updates.
+import { applyWidth, chartMenuButton, chartSize, heightScale, moveItem, type ChartSize } from './chartLayout';
 import uPlot from 'uplot';
 import { groupLabel } from '../model/analysis';
 import { groupMeanSeries, plotGroups, spreadSeries } from '../model/groupAgg';
@@ -12,6 +13,8 @@ import { MAX_PLOT_RUNS, seriesId, type AppState, type Area } from './state';
 import { button, chip, emptyState, openPopover, toggle } from './ui';
 
 const CHART_H = 230;
+/** Line charts start a third of a row wide (half or full on narrower panels) at normal height. */
+const LINE_SIZE: ChartSize = { w: 'small', h: 'normal' };
 const X_LABEL: Record<XMode, string> = { step: 'Step', epoch: 'Epoch', wall: 'Wall time' };
 
 /** Section name used by the metric picker: `train/loss` -> `train`, `sys/gpu` -> `system`. */
@@ -97,8 +100,10 @@ class ChartCard {
   private noteKey = '';
   /** What the chart currently shows, so it can be re-rendered at export resolution. */
   private shown: { data: uPlot.AlignedData; xMode: XMode; logY: boolean; smooth: boolean } | null = null;
+  /** Plot height in CSS px (the "⋯" menu's Height). */
+  private height = CHART_H;
 
-  constructor(readonly metric: string, onRemove: () => void, onExport: () => void, onData: () => void) {
+  constructor(readonly metric: string, onRemove: () => void, onExport: () => void, onData: () => void, layoutMenu: HTMLButtonElement) {
     this.info = h('span', { class: 'chart-info' });
     this.note = h('div', { class: 'chart-note' });
     this.body = h('div', { class: 'chart-body', title: 'Drag to zoom · double-click to reset · hover a line to highlight it' }, this.note);
@@ -108,9 +113,19 @@ class ChartCard {
     this.el = h(
       'article',
       { class: 'chart-card', 'aria-label': `Chart ${metric}` },
-      h('header', { class: 'chart-head' }, h('span', { class: 'chart-group' }, metricGroup(metric)), h('span', { class: 'chart-title' }, metricShort(metric)), h('span', { class: 'spacer' }), this.info, data, png, remove),
+      h('header', { class: 'chart-head' }, h('span', { class: 'chart-group' }, metricGroup(metric)), h('span', { class: 'chart-title' }, metricShort(metric)), h('span', { class: 'spacer' }), this.info, data, png, remove, layoutMenu),
       this.body,
     );
+    new ResizeObserver(() => this.resize()).observe(this.body);
+  }
+
+  /** Applies the size chosen in the "⋯" menu (grid span and plot height). */
+  setSize(size: ChartSize): void {
+    applyWidth(this.el, size);
+    const height = Math.round(CHART_H * heightScale(size.h));
+    if (height === this.height) return;
+    this.height = height;
+    if (this.chart) this.chart.setSize({ width: this.chart.width, height });
   }
 
   update(st: AppState, runs: RunSummary[], themeVersion: number, colorFor: (run: RunSummary) => string, groups: PlotGroup[] | null = null): void {
@@ -293,7 +308,7 @@ class ChartCard {
     });
     return {
       width,
-      height: CHART_H * k,
+      height: this.height * k,
       legend: { show: false },
       focus: { alpha: 0.28 },
       padding: [10 * k, 8 * k, 0, 0],
@@ -416,7 +431,7 @@ class ChartCard {
         subtitle,
         chart: u.ctx.canvas,
         width,
-        height: CHART_H,
+        height: this.height,
         legend: this.lines.flatMap((l) =>
           l.role === 'faint' ? [] : l.role === 'median' ? [{ color: l.color, label: l.name }, { color: withAlpha(l.color, 0.35), label: '25–75% of runs (IQR)' }] : [{ color: l.color, label: l.name }],
         ),
@@ -431,7 +446,7 @@ class ChartCard {
   resize(): void {
     if (this.chart) {
       const w = Math.max(200, this.body.clientWidth);
-      if (Math.abs(w - this.chart.width) > 1) this.chart.setSize({ width: w, height: CHART_H });
+      if (Math.abs(w - this.chart.width) > 1) this.chart.setSize({ width: w, height: this.height });
     }
   }
 
@@ -472,9 +487,6 @@ export class Plots {
       this.hint,
       this.grid,
     );
-    new ResizeObserver(() => {
-      for (const c of this.cards.values()) c.resize();
-    }).observe(this.grid);
   }
 
   private setMetrics(ms: string[]): void {
@@ -776,11 +788,23 @@ export class Plots {
             const groups = this.plotGroups();
             this.st.saveLineData(m, keys, groups ? Object.fromEntries(groups.flatMap((g) => g.runs.map((r) => [r.key, g.label]))) : undefined);
           },
+          chartMenuButton({
+            st: this.st,
+            id: `line:${m}`,
+            name: m,
+            defaults: LINE_SIZE,
+            position: () => ({ index: this.st.plotMetrics().indexOf(m), count: this.st.plotMetrics().length }),
+            onMove: (to) => {
+              const ms = this.st.plotMetrics();
+              this.setMetrics(moveItem(ms, ms.indexOf(m), to));
+            },
+          }),
         );
         card = c;
         this.cards.set(m, card);
       }
       if (this.grid.children[i] !== card.el) this.grid.insertBefore(card.el, this.grid.children[i] ?? null);
+      card.setSize(chartSize(this.st, `line:${m}`, LINE_SIZE));
       card.update(this.st, runs, this.themeVersion, colorFor, groups);
     });
   }

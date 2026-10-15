@@ -4,6 +4,7 @@
 
 - **Copy run folder.** The run inspector has a *Copy folder* button that copies the run's folder path to the clipboard (hover it to see the path).
 - **Scatter: New plot, one Y per plot.** *Add Y* is replaced by *New plot*, which always adds a plot (with the first metric not charted yet). Each scatter plot has its own single *Y* picker in its header instead of the shared Y picker and the multi-select list (where picking a charted field silently removed its plot and picking the first plot's Y did nothing). The PNG / CSV / remove buttons of Scatter, Box and Bar charts now appear on hover; they were invisible.
+- **Resizable, movable charts.** Every chart (line, scatter, box, bar) has a **⋯** menu: *Width* (small ⅓, medium ½, large ⅔ of a row, or full width), *Height* (compact, normal, tall, extra tall), *Move to first / earlier / later / to last*, and *Reset size*. Sizes are remembered per chart; moving reorders the metrics (line) or fields (other charts). On narrow panels small charts widen to half a row and everything to full width below ~700 px, so plots stay readable. Scatter, Box and Bar charts can now sit side by side.
 
 ## 0.2.6
 

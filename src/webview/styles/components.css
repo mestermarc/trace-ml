@@ -1380,10 +1380,59 @@ input[type='checkbox'].switch-input::after {
   text-overflow: ellipsis;
 }
 
-.chart-grid {
+/*
+ * Line, scatter, box and bar charts sit on a 6-column grid; each chart spans what its "⋯" menu
+ * sets (data-w). Narrower panels widen small charts so plots stay readable.
+ */
+.chart-grid,
+.run-level-panels {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  align-items: start;
+  container-type: inline-size;
+}
+
+.chart-grid {
   gap: var(--tm-space-3);
+}
+
+.chart-grid > *,
+.run-level-panels > * {
+  grid-column: span 6;
+}
+
+.chart-grid > [data-w='small'],
+.run-level-panels > [data-w='small'] {
+  grid-column: span 2;
+}
+
+.chart-grid > [data-w='medium'],
+.run-level-panels > [data-w='medium'] {
+  grid-column: span 3;
+}
+
+.chart-grid > [data-w='large'],
+.run-level-panels > [data-w='large'] {
+  grid-column: span 4;
+}
+
+@container (max-width: 1100px) {
+  .chart-grid > [data-w='small'],
+  .run-level-panels > [data-w='small'] {
+    grid-column: span 3;
+  }
+
+  .chart-grid > [data-w='large'],
+  .run-level-panels > [data-w='large'] {
+    grid-column: span 6;
+  }
+}
+
+@container (max-width: 700px) {
+  .chart-grid > [data-w],
+  .run-level-panels > [data-w] {
+    grid-column: span 6;
+  }
 }
 
 .chart-card {
@@ -1425,6 +1474,20 @@ input[type='checkbox'].switch-input::after {
   width: 22px !important;
   height: 22px !important;
   opacity: 0;
+}
+
+.chart-menu {
+  width: 22px !important;
+  height: 22px !important;
+  opacity: 0.55;
+}
+
+.chart-menu:hover,
+.chart-menu:focus-visible,
+.chart-menu[aria-expanded='true'],
+.chart-card:hover .chart-menu,
+.run-level-panel:hover .chart-menu {
+  opacity: 1;
 }
 
 .chart-card:hover .chart-remove,
@@ -1539,11 +1602,9 @@ input[type='checkbox'].switch-input::after {
   background: var(--tm-surface-hover);
 }
 
-/* scatter / box / bar: one panel per charted field, stacked */
+/* scatter / box / bar: one panel per charted field, on the chart grid above */
 .run-level-panels {
-  display: flex;
-  flex-direction: column;
-  gap: var(--tm-space-4);
+  gap: var(--tm-space-4) var(--tm-space-3);
 }
 
 .run-level-panel {
